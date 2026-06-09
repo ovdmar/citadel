@@ -19,12 +19,36 @@ export type {
   RunDeployRedeployResult,
 } from "./deploy.js";
 export {
+  UNDEPLOY_HOOK_RELATIVE_PATH,
+  resolveUndeployHook,
+  runUndeployHook,
+  undeployHookEnv,
+} from "./undeploy.js";
+export type {
+  ResolveUndeployHookInput,
+  RunUndeployHookResult,
+  UndeployHookEnv,
+  UndeployStreamHandler,
+} from "./undeploy.js";
+export { TEARDOWN_HOOK_RELATIVE_PATH, resolveTeardownHook, runTeardownHook } from "./teardown.js";
+export type {
+  ResolveTeardownHookInput,
+  RunTeardownHookResult,
+  TeardownHookEnv,
+  TeardownStreamHandler,
+} from "./teardown.js";
+export {
   FIX_CONFLICTS_DEFAULT_PROMPT,
   FIX_CONFLICTS_HOOK_RELATIVE_PATH,
   resolveFixConflictsPrompt,
 } from "./fix-conflicts.js";
 export type { FixConflictsHookEnv, ResolveFixConflictsPromptResult } from "./fix-conflicts.js";
 export { CITADEL_NON_FF_POLICY } from "./non-ff-policy.js";
+
+export { describeError, discoverFileHooks } from "./discovery.js";
+export type { FileHook, FileHookDiagnostic } from "./discovery.js";
+export { parseFrontmatter } from "./frontmatter.js";
+export { renderTemplate } from "./template.js";
 
 export type CommandHook = {
   id: string;
@@ -74,6 +98,10 @@ export async function runCommandHookForDiagnostics(hook: CommandHook, payload: u
       clearTimeout(timer);
       resolve({ stdout, stderr, durationMs: Date.now() - startedAt, exitStatus: code });
     });
+    // Swallow EPIPE: a short-lived script (e.g. `exit 0`) may close stdin
+    // before we finish writing the JSON payload. The exit code is what
+    // matters; bubbling EPIPE would surface a spurious failure.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }

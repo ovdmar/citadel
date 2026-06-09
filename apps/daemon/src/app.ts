@@ -1,89 +1,106 @@
 import fs from "node:fs";
-import http from "node:http";
+import type http from "node:http";
+import type https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
-import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
-  CreateRepoInputSchema,
-  CreateWorkspaceInputSchema,
+  type CiProviderSummary,
   HookActionSchema,
-  TransitionIssueInputSchema,
-  type WorkspaceCockpitSummary,
+  type VersionControlSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
+import { mcpStatus } from "@citadel/mcp";
 import {
-  type CollectGitHubVersionControlSummaryDeps,
+  type DiagnosticsLogger,
+  OperationService,
+  createDiagnosticsLogger,
+  executionTargetCwd,
+} from "@citadel/operations";
+import {
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import {
-  attachTerminalWebSocket,
-  createTtydManager,
-  discoverExistingTtyds,
-  ensureTmuxSession,
-} from "@citadel/terminal";
+import { attachTerminalWebSocket, tmuxSessionExists } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { registerAgentTemplateRoutes } from "./agent-templates-routes.js";
+import {
+  asyncRoute,
+  bustCacheByPrefixes,
+  cachedProviderValue,
+  cachedProviderWithStaleFallback,
+  parsePositiveInt,
+} from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
-import { getBootRestoreSummary } from "./boot-restore.js";
+import { createCheckoutPrPrimeOnAgentFinish } from "./checkout-pr-primer.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
+import { createWorkspaceCockpitSummaryBuilder, registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
+import { registerConfigRepoWorkspaceRoutes } from "./config-repo-workspace-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
-import { registerDiscoveryRoutes } from "./discovery-routes.js";
+import { registerDoctorRoutes } from "./doctor-routes.js";
+import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guard.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
-import {
-  AUTOMATED_GH_DISABLED_REASON,
-  automatedGhEnabled,
-  cachedCiOrDisabled,
-  disabledVersionControlSummary,
-  githubCiCacheKey,
-  shouldFetchGithubCi,
-} from "./gh-automation.js";
+import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
 import {
   type GhQuotaWiringWithDetach,
-  decorateWithCooldown,
+  resolveRepoFullNameFromGit,
   resolveRepoFullNameFromWorkspaces,
   wireGhQuota,
 } from "./gh-quota-wiring.js";
+import { createGitHubProviderStateService } from "./github-provider-state.js";
+import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
+import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
-import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { createProviderCache } from "./provider-cache.js";
+import { startProviderRefreshJob } from "./provider-refresh-job.js";
+import { ensurePtyDaemon } from "./pty-daemon-supervisor.js";
+import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
+import { workspaceAppHookSample } from "./readiness.js";
+import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
+import { registerReviewRoutes } from "./review-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
+import { registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
+import { createDaemonServer } from "./server-factory.js";
+import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
+import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
+import { startSystemHealthEvents } from "./system-health-events.js";
+import { registerSystemHealthRoute } from "./system-health-route.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
-import { resolveTtydPortRange } from "./ttyd-slot.js";
-import { fetchVersionControlGated } from "./vc-fetch-gated.js";
+import { buildRespawnTmux } from "./terminal-routes-helpers.js";
+import { createUiActivityTracker } from "./ui-activity.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
-import { readWorkspaceGitStatus } from "./workspace-diff.js";
-import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
+import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
+
+type AnyServer = http.Server | https.Server;
+const TMUX_MOUSE_RUNTIMES = new Set(["claude-code"]);
 
 export type DaemonApp = {
   app: express.Express;
-  server: http.Server;
+  server: AnyServer;
+  protocol: "http" | "https";
   emit: (type: string, payload: unknown) => void;
-  ttyd: ReturnType<typeof createTtydManager>;
   diagnostics: DiagnosticsLogger;
 };
 
@@ -93,37 +110,102 @@ type ProviderCollectors = {
   collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
+  searchJiraIssues: typeof searchJiraIssues;
 };
 
-export function createDaemonApp(input: {
+function unavailableProviderRefreshVc(rootPath: string): Promise<VersionControlSummary> {
+  return Promise.resolve({
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub provider refresh is routed through shared state service (${rootPath})`,
+    defaultBranch: null,
+    currentBranch: null,
+    remotes: [],
+    pullRequest: null,
+    checkedAt: new Date().toISOString(),
+  });
+}
+
+function unavailableProviderRefreshCi(rootPath: string): Promise<CiProviderSummary> {
+  return Promise.resolve({
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub provider refresh is routed through shared state service (${rootPath})`,
+    runs: [],
+    checkedAt: new Date().toISOString(),
+  });
+}
+
+export async function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
   store: SqliteStore;
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
-}): DaemonApp {
+  // Default true. Test helpers pass false so vitest boots don't spawn the
+  // background tick (and the implied `gh`/`jtk` subprocesses on tick).
+  // Note: deliberately NOT gated on process.env.VITEST — that pattern would
+  // silently disable the feature in production if the env var leaks.
+  enableRefreshJob?: boolean;
+}): Promise<DaemonApp> {
   const { config, configPath, store } = input;
+  // Identity token for this daemon process — watchdogs use strict inequality.
+  const daemonStartedAt = new Date().toISOString();
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
-  const operations = input.operations ?? new OperationService(store, config);
   const providers: ProviderCollectors = {
     collectGitHubVersionControlSummary,
     collectGitHubCiRuns,
     collectGitHubCiRunLog,
     collectJiraIssueSummary,
     transitionJiraIssue,
+    searchJiraIssues,
     ...input.providers,
   };
   const app = express();
-  const server = http.createServer(app);
+  const { server, protocol } = createDaemonServer(app, config);
+  // The daemon owns several legitimate close hooks (provider cache flush,
+  // schedulers, status monitors, terminal cleanup). Keep Node from reporting
+  // these as listener leaks in integration tests and diagnostics-heavy boots.
+  server.setMaxListeners(24);
+  // Playwright's API client can reuse daemon sockets across long browser-only
+  // stretches of the e2e suite. Node's 5s default keep-alive timeout can close
+  // those sockets just as the next request starts on slower CI runners, which
+  // surfaces as a transient ECONNRESET instead of an application response.
+  const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, 120_000);
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 5_000);
   const sseClients = new Set<express.Response>();
-  const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+  const providerCache = createProviderCache({
+    dataDir: config.dataDir,
+    // Both workspace ids AND repo ids appear as the "id" segment of vc:/ci:
+    // cache keys (workspace via cockpit-summary, repo via the per-repo
+    // provider-summary / ci-runs routes). The orphan prune treats them
+    // homogeneously: keep entries whose id matches ANY live entity.
+    listLiveIds: () => [...store.listWorkspaces().map((w) => w.id), ...store.listRepos().map((r) => r.id)],
+  });
+  // Hydrate the persisted cache BEFORE any route is registered so the first
+  // post-restart request can hit warm cache. The load() is bounded by a 500ms
+  // hard timeout — slow disks degrade to an empty cache but never block boot.
+  await providerCache.load();
+  // Construct the Jira auto-transition callback ONCE so the same identity
+  // reaches OperationService (for agent.started + archive/remove) and
+  // registerWorkspaceExtraRoutes (for workspace.issue_attached).
+  const runAutoTransitions = wireJiraAutoTransitions({
+    config,
+    providers,
+    store,
+    emit: (type, payload) => emit(type, payload),
+    providerCache,
+  });
+  const operations = input.operations ?? new OperationService(store, config, runAutoTransitions);
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
   // (rotated at 50 MB) and keeps the last 1000 events in memory for the
   // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
   // Sprinkled through every session-killing path so that when a user reports
   // "all my sessions died", we have the lifecycle trail to share.
   const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  const uiActivity = createUiActivityTracker();
   diagnostics.log("daemon", "createDaemonApp", {
     port: config.port,
     dataDir: config.dataDir,
@@ -131,30 +213,37 @@ export function createDaemonApp(input: {
     pid: process.pid,
     nodeVersion: process.versions.node,
   });
-  const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
-  // Release the ttyd on every stopAgentSession path; guarded for test stubs.
-  if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
-  }
-
+  backfillRepoProviderRepositoryKeys(store);
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const detachSseClient = (client: express.Response) => {
+    if (sseClients.delete(client)) ghQuota.onViewerDetached();
+  };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
-  const gatedVcDeps = {
+  const githubState = createGitHubProviderStateService({
     store,
     scheduler: ghQuota.scheduler,
     providerCache,
-    collectVc: (path: string, deps?: CollectGitHubVersionControlSummaryDeps) =>
-      providers.collectGitHubVersionControlSummary(path, deps),
+    collectVersionControl: (path, deps) => providers.collectGitHubVersionControlSummary(path, deps),
+    collectCi: (path) => providers.collectGitHubCiRuns(path),
+    collectCiRunLog: (path, runId) => providers.collectGitHubCiRunLog(path, runId),
     resolveRepoFullName,
     cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
-  };
+    cachedProviderSwr: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProviderSwr(k, l, t),
+    ghAutomationEnabled,
+    hasViewers: ghQuota.hasViewers,
+    msSinceLastViewer: ghQuota.msSinceLastViewer,
+  });
 
   app.use(cors());
+  app.use((req, res, next) => {
+    const mismatch = e2eRunIdMismatch(req.get(E2E_RUN_ID_HEADER));
+    if (!mismatch) return next();
+    res.status(409).json(mismatch);
+  });
   app.use(express.json({ limit: "2mb" }));
 
-  let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
   const emit = (type: string, payload: unknown) => {
     const event: AppEvent = {
       id: `sse_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -163,60 +252,19 @@ export function createDaemonApp(input: {
       source: "daemon",
       payload,
     };
-    for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
-    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
-      fsWatchers.reconcile();
-    }
+    writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
   };
-
-  // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
-  //
-  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
-  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
-  // the host for survivors from the previous incarnation and adopt them back
-  // into the manager — same key, same PID, no respawn. The browser's
-  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
-  // it was talking to before the restart.
-  //
-  // Discovery is scoped to this daemon's port slot before adopt() routes by
-  // DB membership. That port filter is a hard safety boundary: sandbox
-  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
-  // the installed daemon's ttyds.
-  //
-  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
-  // to the live cockpit's ttyds and the next test that calls release() would
-  // kill them.
-  if (!process.env.VITEST) {
-    const survivors = discoverExistingTtyds({
-      basePathPrefix: ttyd.config.basePathPrefix,
-      portBase: ttyd.config.portBase,
-      portMax: ttyd.config.portMax,
-    });
-    const sessionTabIds = new Map<string, string>();
-    for (const session of store.listSessions()) {
-      sessionTabIds.set(session.id, session.tabId ?? session.id);
-    }
-    const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
-    const { adopted, reapedDuplicates, reapedUnknown } = ttyd.adopt(survivors, resolveTabId);
-    if (adopted > 0 || reapedDuplicates > 0 || reapedUnknown > 0) {
-      emit("terminal.adopted", {
-        adopted,
-        reapedDuplicates,
-        reapedUnknown,
-        portRange: [ttyd.config.portBase, ttyd.config.portMax],
-      });
-    }
-  }
-  const { recentUserAction } = wireTerminalRoutes({
-    app,
-    server,
+  const primeCheckoutPrOnAgentFinish = createCheckoutPrPrimeOnAgentFinish({
     store,
-    ttyd,
-    dataDir: config.dataDir,
-    emit,
-    config,
-    diagnostics,
+    github: githubState,
+    onRefreshed: (workspace, checkout) => {
+      emit("workspace.pr.updated", { workspaceId: workspace.id, checkoutId: checkout?.id ?? null });
+    },
   });
+
+  const recentUserAction = new Map<string, number>();
+  let statusMonitor: ReturnType<typeof startDaemonStatusMonitor> = null;
+  const respawnTmuxForWebSocket = buildRespawnTmux(store, config);
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -239,6 +287,7 @@ export function createDaemonApp(input: {
         app: "citadel",
         mode: "local-first",
         databasePath: config.databasePath,
+        ...e2eHealthFields(config),
         degradedProviders: degradedProviders.length,
         providerHealth,
         mcp: mcpStatus(config.mcp.enabled),
@@ -247,216 +296,46 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/state",
-    asyncRoute(async (_req, res) => {
-      const repos = store.listRepos();
-      const workspaces = store.listWorkspaces();
-      const sessions = store.listSessions();
-      const providerHealth = await cachedProviderHealth();
-      res.json({
-        repos,
-        workspaces,
-        sessions,
-        operations: store.listOperations(),
-        activity: store.listActivity(),
-        providerHealth,
-        runtimes: listRuntimeHealth(config.runtimes),
-        mcp: mcpStatus(config.mcp.enabled),
-        scheduledAgents: scheduledAgents.list(),
-        namespaces: store.listNamespaces(),
-        bootRestore: getBootRestoreSummary(),
-      });
-    }),
-  );
+  registerDiagnosticsRoutes({ app, store, diagnostics, config, uiActivity });
+  registerConfigRepoWorkspaceRoutes({ app, config, configPath, store, operations, providerCache, emit, asyncRoute });
 
-  app.get("/api/config", (_req, res) => {
-    res.json({ config, configPath });
-  });
-
-  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
-
-  app.put("/api/config", (req, res) => {
-    const nextConfig = mergeConfigPatch(config, req.body);
-    const saved = saveConfig(nextConfig, configPath);
-    Object.assign(config, saved);
-    setGithubCommand(saved.providers.github.command);
-    setJiraCommand(saved.providers.jira.command);
-    providerCache.clear();
-    store.addActivity({
-      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
-      type: "settings.updated",
-      source: "user",
-      repoId: null,
-      workspaceId: null,
-      operationId: null,
-      message: "Updated local config",
-      createdAt: new Date().toISOString(),
+  app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
+    const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    diagnostics.log("terminal-client", typeof body.event === "string" ? body.event.slice(0, 80) : "unknown", {
+      sessionId,
+      path: typeof body.path === "string" ? body.path.slice(0, 240) : "",
+      visibility: typeof body.visibility === "string" ? body.visibility.slice(0, 40) : "unknown",
     });
-    emit("config.updated", { configPath });
-    res.json({ config, configPath });
+    statusMonitor?.invalidatePaneCapture(sessionId);
+    res.status(204).end();
   });
 
-  app.post("/api/repos", (req, res) => {
-    const input = CreateRepoInputSchema.parse(req.body);
-    const repo = operations.registerRepo(input);
-    emit("repo.updated", { repoId: repo.id, repo });
-    res.status(201).json({ repo });
+  app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
+    const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
+    recentUserAction.set(sessionId, Date.now());
+    statusMonitor?.invalidatePaneCapture(sessionId);
+    res.status(204).end();
   });
 
-  registerDiscoveryRoutes({ app, config, asyncRoute });
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
-  app.get("/api/repos", (_req, res) => {
-    res.json({ repos: store.listRepos() });
+  const buildWorkspaceCockpitSummary = createWorkspaceCockpitSummaryBuilder({
+    store,
+    operations,
+    providers,
+    providerCache,
+    cachedProvider,
+    cachedProviderSwr,
+    cachedProviderHealth,
+    ghAutomationEnabled,
+    resolveRepoFullName,
+    fetchVersionControl: (workspace, repo, cacheKey) =>
+      githubState.fetchVersionControl(workspace, repo, cacheKey, { intent: "interactive" }),
+    fetchCi: (workspace, repo) =>
+      githubState.fetchCi(workspace, repo, { intent: "interactive", staleWhileRevalidate: true }),
   });
-
-  app.delete(
-    "/api/repos/:repoId",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const result = await operations.removeRepo({
-        repoId,
-        force: req.query.force === "true",
-        cleanupWorktrees: req.query.cleanupWorktrees === "true",
-      });
-      providerCache.clear();
-      emit("repo.updated", result);
-      res.status(result.removed ? 202 : 409).json(result);
-    }),
-  );
-
-  app.get("/api/workspaces", (_req, res) => {
-    res.json({ workspaces: store.listWorkspaces() });
-  });
-
-  app.get(
-    "/api/repos/:repoId/branches",
-    asyncRoute(async (req, res) => {
-      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const localBranches = local.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const remoteBranches = remote.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .filter((line) => !line.endsWith("/HEAD"))
-          .map((line) => (line.includes("/") ? line.split("/").slice(1).join("/") : line));
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: localBranches,
-          remote: Array.from(new Set(remoteBranches)),
-        });
-      } catch (error) {
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: [],
-          remote: [],
-          error: error instanceof Error ? error.message : "git_branches_failed",
-        });
-      }
-    }),
-  );
-
-  app.get(
-    "/api/workspaces/:workspaceId/issue-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
-        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-      );
-      res.json({ issueTracker });
-    }),
-  );
-
-  // Shared by the active-workspace and batch cockpit summary endpoints.
-  async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-    if (!workspace) return null;
-    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) return null;
-    const ciKey = githubCiCacheKey(
-      workspace,
-      repo,
-      resolveRepoFullName(repo.id),
-      store.getWorkspacePrSnapshot(workspace.id),
-    );
-    const shouldFetchCi = ghAutomationEnabled && shouldFetchGithubCi(store, workspace);
-    const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
-      cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      ghAutomationEnabled
-        ? fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`)
-        : Promise.resolve(disabledVersionControlSummary(workspace, repo)),
-      shouldFetchCi
-        ? cachedProvider(ciKey, () => providers.collectGitHubCiRuns(workspace.path), 60_000)
-        : Promise.resolve(
-            cachedCiOrDisabled(
-              providerCache,
-              ciKey,
-              ghAutomationEnabled
-                ? "GitHub CI is cached until the PR receives a new local commit"
-                : AUTOMATED_GH_DISABLED_REASON,
-            ),
-          ),
-      workspace.issueKey
-        ? cachedProvider(`issue:${workspace.issueKey}`, () =>
-            providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-          )
-        : Promise.resolve(null),
-      cachedProvider(
-        `apps:${workspace.id}:${workspace.updatedAt}`,
-        () => operations.discoverWorkspaceApps({ repo, workspace }),
-        60_000,
-      ),
-    ]);
-    const versionControl = decorateWithCooldown(versionControlRaw);
-    return {
-      workspaceId: workspace.id,
-      readiness: deriveReadiness({
-        workspace,
-        sessions: store.listSessions(workspace.id),
-        operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-        providerHealth: await cachedProviderHealth(),
-        git,
-        versionControl,
-        ci,
-        apps,
-      }),
-      git,
-      versionControl,
-      ci,
-      issueTracker,
-      apps,
-    };
-  }
-
-  app.get(
-    "/api/workspaces/:workspaceId/cockpit-summary",
-    asyncRoute(async (req, res) => {
-      const workspaceId = req.params.workspaceId;
-      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const summary = await buildWorkspaceCockpitSummary(workspaceId);
-      if (!summary) return res.status(404).json({ error: "workspace_not_found" });
-      res.json(summary);
-    }),
-  );
+  registerCockpitSummaryRoute({ app, buildWorkspaceCockpitSummary, asyncRoute });
 
   app.get("/api/repos/:repoId/hook-diagnostics", (req, res) => {
     const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
@@ -483,51 +362,24 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.post(
-    "/api/workspaces/:workspaceId/issue-transition",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const input = TransitionIssueInputSchema.parse(req.body);
-      const result = await providers.transitionJiraIssue({
-        issueKey: workspace.issueKey,
-        transition: input.transition,
-        fields: input.fields,
-      });
-      providerCache.delete(`issue:${workspace.issueKey}`);
-      emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
-      res.status(result.status === "healthy" ? 202 : 424).json({ result });
-    }),
-  );
-
-  app.post(
-    "/api/workspaces",
-    asyncRoute(async (req, res) => {
-      const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
-      emit("workspace.updated", result);
-      res.status(202).json(result);
-    }),
-  );
-
-  app.get("/api/runtimes", (_req, res) => {
-    res.json({ runtimes: listRuntimeHealth(config.runtimes) });
-  });
+  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit, cachedProvider: cachedProviderSwr });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
+  registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
+  registerScaffoldHookRoutes({ app, config, store, operations, asyncRoute });
   registerPrRoutes({
     app,
     store,
-    providers,
+    github: githubState,
     asyncRoute,
-    cachedProvider,
     providerCache,
     buildWorkspaceCockpitSummary,
     resolveRepoFullName,
+    operations,
   });
+  registerReviewRoutes({ app, store, config, asyncRoute, emit });
 
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(
@@ -572,31 +424,6 @@ export function createDaemonApp(input: {
     res.json({ operation });
   });
 
-  app.patch(
-    "/api/repos/:repoId",
-    asyncRoute(async (req, res) => {
-      const repoId = String(req.params.repoId);
-      const patch = req.body ?? {};
-      const allowed: Record<string, unknown> = {};
-      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
-      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
-        allowed.worktreeParent = patch.worktreeParent;
-      if (Array.isArray(patch.setupHookIds))
-        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.teardownHookIds))
-        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.providerIds))
-        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
-      if (typeof patch.deployHookCommand === "string")
-        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
-      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
-      const next = store.updateRepo(repoId, allowed);
-      if (!next) return res.status(404).json({ error: "repo_not_found" });
-      emit("repo.updated", { repoId: next.id, repo: next });
-      res.json({ repo: next });
-    }),
-  );
-
   registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
@@ -614,18 +441,6 @@ export function createDaemonApp(input: {
       ].filter(Boolean) as string[];
       bustCacheByPrefixes(providerCache, prefixes);
       emit("workspace.refreshed", { workspaceId: workspace.id });
-      res.json({ refreshed: prefixes });
-    }),
-  );
-
-  app.post(
-    "/api/repos/:repoId/refresh",
-    asyncRoute(async (req, res) => {
-      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
-      bustCacheByPrefixes(providerCache, prefixes);
-      emit("repo.refreshed", { repoId: repo.id });
       res.json({ refreshed: prefixes });
     }),
   );
@@ -667,6 +482,12 @@ export function createDaemonApp(input: {
     emit,
     asyncRoute,
   });
+  // Extracted route registrations live here (post-scheduledAgents init) so the
+  // /api/state handler can close over a fully-initialized runner. app.ts hit
+  // the 800-line size gate, hence the extraction.
+  registerStateRoute({ app, store, config, scheduledAgents, daemonStartedAt, cachedProviderHealth, asyncRoute });
+  registerSystemHealthRoute({ app, config, asyncRoute });
+  registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   // Boot-sweep: close any 'running' run rows that were in flight when the
   // daemon last died, sync the denormalized lastRunStatus cache on the
   // affected agents, kill orphan background tmux sessions, and drain queued
@@ -677,27 +498,47 @@ export function createDaemonApp(input: {
     console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error);
   });
 
-  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
+  const mcpDeps = { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
-    callDaemonMcpTool: (call) => callDaemonMcpTool(mcpDeps, call),
+    callDaemonMcpTool: (call, context) => callDaemonMcpTool(mcpDeps, call, context),
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, runAutoTransitions, config });
+  wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
+  registerAgentTemplateRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
+  const refreshJob =
+    input.enableRefreshJob !== false
+      ? startProviderRefreshJob({
+          config,
+          store,
+          cache: providerCache,
+          providers: {
+            collectGitHubVersionControlSummary: unavailableProviderRefreshVc,
+            collectGitHubCiRuns: unavailableProviderRefreshCi,
+            collectJiraIssueSummary: (issueKey) => providers.collectJiraIssueSummary(issueKey),
+            collectRuntimeUsage: (provider) =>
+              import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
+            listRuntimeHealth: () => listRuntimeHealth(config.agentRuntimes),
+          },
+          github: githubState,
+          hasFocusedWindow: () => uiActivity.hasFocusedWindow(),
+        })
+      : null;
+  if (refreshJob) server.on("close", () => refreshJob.stop());
+
+  server.on("close", () => {
+    // Final synchronous flush so the persisted cache reflects in-memory state
+    // at shutdown. Errors are logged inside dispose() and not re-thrown.
+    void providerCache.dispose();
   });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
@@ -709,14 +550,11 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
-    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
-    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
-    // poll fetches fresh instead of waiting for the cadence window.
+    attachSseClientErrorHandler(res, detachSseClient, diagnostics);
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
-      sseClients.delete(res);
-      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+      detachSseClient(res);
     });
   });
 
@@ -740,11 +578,78 @@ export function createDaemonApp(input: {
     res.status(400).json({ error: message });
   });
 
-  // Diagnostic xterm.js gateway. The cockpit uses ttyd via /terminals/* instead; this stays for tooling.
-  attachTerminalWebSocket(server, (sessionId) => {
-    const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-    return session?.tmuxSessionName ?? null;
-  });
+  // Primary terminal gateway: xterm.js in the browser talks to a disposable
+  // websocket viewer. Tmux-backed sessions still attach through a short-lived
+  // node-pty `tmux attach-session` client; PTY-daemon sessions attach to the
+  // detached PTY owner over its private Unix socket.
+  attachTerminalWebSocket(
+    server,
+    async (sessionId) => {
+      const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+      if (!session) return null;
+      if (session.terminalBackend === "pty-daemon") {
+        if (session.kind !== "terminal") return null;
+        const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+        if (!workspace) return null;
+        const checkout = session.checkoutId ? store.findWorkspaceCheckout(session.checkoutId) : null;
+        const cwd =
+          session.targetType === "workspace_home"
+            ? executionTargetCwd({ workspace, targetType: "workspace_home" })
+            : checkout
+              ? executionTargetCwd({ workspace, checkout, targetType: "worktree_checkout" })
+              : workspace.mode === "structured"
+                ? executionTargetCwd({ workspace, targetType: "workspace_home" })
+                : workspace.path;
+        const owner = await ensurePtyDaemon({ dataDir: config.dataDir });
+        const terminal = config.terminal;
+        const ptySessionId = session.ptySessionId ?? session.id;
+        return {
+          backend: "pty-daemon",
+          sessionId: ptySessionId,
+          socketPath: owner.socketPath,
+          cwd,
+          command: terminal.command,
+          args: terminal.args,
+          env: { TERM: "xterm-256color", COLORTERM: "truecolor", FORCE_COLOR: "1", CLICOLOR_FORCE: "1" },
+          kind: session.kind,
+          onSessionReady: () => {
+            store.updateWorkspaceSessionTerminalOwner(session.id, {
+              terminalBackend: "pty-daemon",
+              ptySessionId,
+              ptyOwnerSocket: owner.socketPath,
+              ptyOwnerPid: owner.pid,
+              ptyLastSeenAt: new Date().toISOString(),
+            });
+            emit("terminal.ready", {
+              sessionId: session.id,
+              ptySession: ptySessionId,
+              renderer: "xterm-pty-daemon",
+              adopted: owner.adopted,
+            });
+          },
+        };
+      }
+      const enableTmuxMouse = session.kind === "agent" && TMUX_MOUSE_RUNTIMES.has(session.runtimeId);
+      if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
+        return {
+          sessionName: session.tmuxSessionName,
+          socketName: session.tmuxSocketName ?? null,
+          enableTmuxMouse,
+        };
+      }
+      const respawn = await respawnTmuxForWebSocket(session);
+      if (!respawn) return null;
+      emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
+      return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null, enableTmuxMouse };
+    },
+    {
+      authorize: (request) => {
+        const raw = request.headers[E2E_RUN_ID_HEADER];
+        const mismatch = e2eRunIdMismatch(Array.isArray(raw) ? raw[0] : raw);
+        return mismatch ? { status: 409, body: mismatch } : null;
+      },
+    },
+  );
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.
   if (process.env.CITADEL_DISABLE_REAPER !== "1") {
@@ -762,7 +667,9 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
+  statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics, {
+    onAgentStatusTransition: primeCheckoutPrOnAgentFinish,
+  });
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,
@@ -773,20 +680,43 @@ export function createDaemonApp(input: {
     // is a viewer-visible feature; consuming GitHub quota with nobody watching
     // is the largest pre-optimization quota sink.
     shouldRun: () => ghAutomationEnabled && (ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000),
-    providerCache,
-    scheduler: ghQuota.scheduler,
-    resolveRepoFullName,
-    cachedProvider,
+    github: githubState,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
-  const terminalReaper = startTerminalReaper();
+  const systemHealthEvents = startSystemHealthEvents({
+    config,
+    emit,
+    hasViewers: () => sseClients.size > 0,
+  });
+  server.on("close", () => systemHealthEvents.stop());
+  const terminalReaper = startTerminalReaper({
+    listSocketNames: () => {
+      const sockets = new Set<string | null>([null]);
+      for (const session of store.listWorkspaceSessions()) sockets.add(session.tmuxSocketName ?? null);
+      return sockets;
+    },
+  });
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, ttyd, diagnostics };
-
+  return { app, server, protocol, emit, diagnostics };
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
+  }
+  // Stale-while-revalidate variant used by the per-workspace provider routes
+  // (vc:*, ci:*, issue:*). Strict cachedProvider is preserved for provider-
+  // health, git:*, apps:* — they need authoritative freshness or have their
+  // own TTL semantics.
+  function cachedProviderSwr<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
+    return cachedProviderWithStaleFallback({ cache: providerCache, key, load, ttlMs });
+  }
+}
+
+function backfillRepoProviderRepositoryKeys(store: SqliteStore): void {
+  for (const repo of store.listRepos()) {
+    if (repo.providerRepositoryKey) continue;
+    const key = resolveRepoFullNameFromGit(repo.rootPath, repo.defaultRemote || "origin");
+    if (key) store.updateRepo(repo.id, { providerRepositoryKey: key });
   }
 }

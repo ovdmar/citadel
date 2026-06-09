@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireClick, render } from "./test-utils.js";
 import { Toaster, getToastQueueLength, resetToastQueue, toast } from "./toast.js";
@@ -24,7 +24,7 @@ function mount(node: React.ReactNode) {
 describe("Toast", () => {
   it("renders enqueued toasts inside <Toaster />", () => {
     mount(<Toaster />);
-    act(() => {
+    flushSync(() => {
       toast({ title: "Saved", description: "Your changes are live." });
     });
     const region = document.querySelector('[data-component="toaster"]');
@@ -35,11 +35,11 @@ describe("Toast", () => {
   it("auto-dismisses after the configured duration", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     mount(<Toaster />);
-    act(() => {
+    flushSync(() => {
       toast({ title: "Will go away" });
     });
     expect(getToastQueueLength()).toBe(1);
-    act(() => {
+    flushSync(() => {
       vi.advanceTimersByTime(5_001);
     });
     expect(getToastQueueLength()).toBe(0);
@@ -47,12 +47,12 @@ describe("Toast", () => {
 
   it("renders danger variant with role=alert and non-critical variants with explicit role=status", () => {
     mount(<Toaster />);
-    act(() => {
+    flushSync(() => {
       toast({ title: "Boom", variant: "danger" });
     });
     const alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Boom");
-    act(() => {
+    flushSync(() => {
       toast({ title: "Polite", variant: "success" });
     });
     // Find the status node (must be explicit, not implicit on <output>) so
@@ -64,7 +64,7 @@ describe("Toast", () => {
 
   it("dismisses via the close button", () => {
     mount(<Toaster />);
-    act(() => {
+    flushSync(() => {
       toast({ title: "Bye" });
     });
     expect(getToastQueueLength()).toBe(1);
@@ -75,7 +75,7 @@ describe("Toast", () => {
 
   it("caps the queue at the configured maximum", () => {
     mount(<Toaster maxQueue={3} />);
-    act(() => {
+    flushSync(() => {
       for (let i = 0; i < 5; i++) toast({ title: `t${i}` });
     });
     expect(getToastQueueLength()).toBe(3);

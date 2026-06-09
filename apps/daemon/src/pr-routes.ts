@@ -1,64 +1,79 @@
-import type { CiProviderSummary, VersionControlSummary, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type {
+  CiProviderSummary,
+  HookEvent,
+  PullRequestSummary,
+  Repo,
+  VersionControlSummary,
+  Workspace,
+  WorkspaceCockpitSummary,
+} from "@citadel/contracts";
 import { PrMergeRequestSchema, WorkspaceCockpitSummaryBatchRequestSchema } from "@citadel/contracts/pr-routes";
 import type { SqliteStore } from "@citadel/db";
-import {
-  type collectGitHubCiRunLog,
-  type collectGitHubCiRuns,
-  type collectGitHubVersionControlSummary,
-  getGhCooldown,
-  mergePr,
-  pLimit,
-} from "@citadel/providers";
+import { getGhCooldown, mergePr, pLimit } from "@citadel/providers";
 import type express from "express";
 import { ZodError } from "zod";
-import { buildVersionControlProviderDeps, decorateWithCooldown } from "./gh-quota-wiring.js";
-import { bustGlobalPrEntry, globalPrCacheKeyForWorkspace } from "./global-pr-cache.js";
-import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
-
-type ProviderCollectors = {
-  collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
-  collectGitHubCiRuns: typeof collectGitHubCiRuns;
-  collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
-};
+import { bustCacheByPrefixes } from "./app-helpers.js";
+import { decorateWithCooldown } from "./gh-quota-wiring.js";
+import type { GitHubProviderStateService } from "./github-provider-state.js";
+import {
+  bustGlobalPrEntry,
+  globalPrCacheKey,
+  globalPrCacheKeyForWorkspace,
+  writeGlobalPrSummary,
+} from "./global-pr-cache.js";
+import { checkoutVcCacheKey } from "./provider-cache.js";
 
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
 type AsyncRoute = (
   handler: AsyncHandler,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
 
-type CachedProvider = <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
-
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+
+const VC_PROVIDER_CACHE_TTL_MS = 90_000;
+
+type HookEventRunner = {
+  runHookEvent(input: {
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    payload?: unknown;
+    operationType?: string;
+    operationMessage?: string;
+  }): Promise<{ operationId: string; ran: number }>;
+};
+
+function requestString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 // Repo-level PR/CI routes + workspace-level batch poll, force-refresh, and
 // merge endpoints.
 //
-// Caching boundary with #15: keys use the established `vc:` / `ci:` prefixes
-// and go through the daemon's cachedProvider helper. #15 may later replace
-// the in-memory map with a richer caching layer; we depend only on
-// cachedProvider(key, fn, ttl?) and bustCacheByPrefixes(cache, prefixes).
+// GitHub reads go through GitHubProviderStateService so cache freshness,
+// scheduler cadence, stale-while-revalidate, and in-flight de-dupe stay in
+// one place. Routes only own request validation, cache bust intent, and
+// non-GitHub mutations such as mergePr.
 export function registerPrRoutes(input: {
   app: express.Express;
   store: SqliteStore;
-  providers: ProviderCollectors;
+  github: GitHubProviderStateService;
   asyncRoute: AsyncRoute;
-  cachedProvider: CachedProvider;
   providerCache: ProviderCache;
   resolveRepoFullName: (repoId: string) => string | null;
   buildWorkspaceCockpitSummary: (workspaceId: string) => Promise<WorkspaceCockpitSummary | null>;
+  operations?: HookEventRunner;
 }) {
   const {
     app,
     store,
-    providers,
+    github,
     asyncRoute,
-    cachedProvider,
     providerCache,
     resolveRepoFullName,
     buildWorkspaceCockpitSummary,
+    operations,
   } = input;
-  const providerDepsForRepo = (repoId: string) =>
-    buildVersionControlProviderDeps(providerCache, () => resolveRepoFullName(repoId));
 
   app.get(
     "/api/repos/:repoId/provider-summary",
@@ -67,10 +82,10 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl: VersionControlSummary = await cachedProvider(
+      const versionControl: VersionControlSummary = await github.fetchRepoVersionControl(
+        repo,
         `vc:${repo.id}:${repo.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(repo.rootPath, providerDepsForRepo(repo.id)),
-        90_000,
+        { intent: "interactive", staleWhileRevalidate: true },
       );
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
@@ -83,11 +98,11 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci: CiProviderSummary = await cachedProvider(
-        `ci:${repo.id}:${repo.updatedAt}`,
-        () => providers.collectGitHubCiRuns(repo.rootPath),
-        180_000,
-      );
+      const ci: CiProviderSummary = await github.fetchRepoCi(repo, `ci:${repo.id}:${repo.updatedAt}`, {
+        intent: "interactive",
+        staleWhileRevalidate: true,
+        ttlMs: 180_000,
+      });
       res.json({ ci });
     }),
   );
@@ -101,7 +116,7 @@ export function registerPrRoutes(input: {
       if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
+      const log = await github.fetchCiRunLog(repo, runId, { intent: "interactive", staleWhileRevalidate: true });
       res.json({ log });
     }),
   );
@@ -153,8 +168,17 @@ export function registerPrRoutes(input: {
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      const checkoutId = requestString((req.body as { checkoutId?: unknown } | null | undefined)?.checkoutId);
+      const checkout = checkoutId ? store.findWorkspaceCheckout(checkoutId) : null;
+      if (checkoutId && (!checkout || checkout.workspaceId !== workspace.id || checkout.archivedAt)) {
+        return res.status(404).json({ error: "checkout_not_found" });
+      }
+      const repoId = checkout?.repoId ?? workspace.repoId;
+      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const targetCacheKey = checkout
+        ? checkoutVcCacheKey(workspace.id, checkout.id, checkout.updatedAt)
+        : `vc:${workspace.id}:${workspace.updatedAt}`;
       // During gh cooldown, skip the cache-bust + fetch — serve whatever's in
       // cache decorated with cooldownUntil so the FE banner can render. No 503;
       // the response shape stays uniform across cooldown / normal.
@@ -162,21 +186,27 @@ export function registerPrRoutes(input: {
         const nameWithOwner = resolveRepoFullName(repo.id);
         bustCacheByPrefixes(
           providerCache,
-          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
-            Boolean,
-          ) as string[],
+          [targetCacheKey, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(Boolean) as string[],
         );
-        const key = globalPrCacheKeyForWorkspace(workspace, {
-          resolveRepoFullName,
-          getSnapshot: (id) => store.getWorkspacePrSnapshot(id),
-        });
-        if (key) providerCache.delete(key);
+        if (!checkout) {
+          const key = globalPrCacheKeyForWorkspace(workspace, {
+            resolveRepoFullName,
+            getSnapshot: (id) => store.getWorkspacePrSnapshot(id),
+          });
+          if (key) providerCache.delete(key);
+        }
       }
-      const versionControl: VersionControlSummary = await cachedProvider(
-        `vc:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
-        90_000,
-      );
+      const versionControl: VersionControlSummary = checkout
+        ? await github.fetchCheckoutVersionControl(workspace, checkout, repo, targetCacheKey, {
+            intent: "interactive",
+            force: true,
+            staleWhileRevalidate: true,
+          })
+        : await github.fetchVersionControl(workspace, repo, targetCacheKey, {
+            intent: "interactive",
+            force: true,
+            staleWhileRevalidate: true,
+          });
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
   );
@@ -197,17 +227,30 @@ export function registerPrRoutes(input: {
         if (error instanceof ZodError) return res.status(400).json({ error: "invalid_merge_request" });
         throw error;
       }
-      const summary = await cachedProvider(
-        `vc:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
-        90_000,
-      );
-      const number = summary.pullRequest?.number;
-      if (typeof number !== "number")
+      const summary = await github.fetchVersionControl(workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`, {
+        intent: "interactive",
+        staleWhileRevalidate: true,
+      });
+      const pr = summary.pullRequest;
+      const number = pr?.number;
+      if (!pr || typeof number !== "number")
         return res.status(409).json({ ok: false, reason: "no_pr", detail: "Workspace has no open PR" });
-      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
-      const nameWithOwner = resolveRepoFullName(repo.id);
-      if (result.ok) {
+      const hookResult = operations
+        ? await operations.runHookEvent({
+            event: "pr.merge",
+            repo,
+            workspace,
+            operationType: "pr.merge",
+            operationMessage: `Running PR #${number} merge hooks`,
+            payload: {
+              strategy: parsed.strategy,
+              pullRequest: summary.pullRequest,
+              versionControl: summary,
+            },
+          })
+        : { operationId: null, ran: 0 };
+      if (hookResult.ran > 0) {
+        const nameWithOwner = resolveRepoFullName(repo.id);
         bustCacheByPrefixes(
           providerCache,
           [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
@@ -215,11 +258,60 @@ export function registerPrRoutes(input: {
           ) as string[],
         );
         if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
+        return res.status(202).json({ ok: true });
+      }
+      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
+      const nameWithOwner = resolveRepoFullName(repo.id);
+      if (result.ok) {
+        const mergedPr = markPullRequestMerged(pr);
+        const checkedAt = new Date().toISOString();
+        const mergedVersionControl: VersionControlSummary = {
+          ...summary,
+          pullRequest: mergedPr,
+          checkedAt,
+        };
+        providerCache.set(`vc:${workspace.id}:${workspace.updatedAt}`, {
+          expiresAt: Date.now() + VC_PROVIDER_CACHE_TTL_MS,
+          value: mergedVersionControl,
+        });
+        if (nameWithOwner) writeGlobalPrSummary(providerCache, globalPrCacheKey(nameWithOwner, number), mergedPr);
+        store.updateWorkspacePrSnapshot(workspace.id, {
+          prNumber: number,
+          prState: "merged",
+          lastFetchAt: checkedAt,
+          lastChecksGreenAt: allChecksGreen(mergedPr) ? checkedAt : null,
+          lastHeadSha: mergedPr.headSha ?? null,
+          lastMergeStateStatus: mergedPr.mergeStateStatus ?? null,
+        });
+        bustCacheByPrefixes(
+          providerCache,
+          [`ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(Boolean) as string[],
+        );
       } else if (nameWithOwner && isMergeStrategyCacheFailure(result.reason, result.detail)) {
         providerCache.delete(`gh-repo-merge-strategies:${nameWithOwner}`);
       }
       res.status(result.ok ? 200 : 409).json(result);
     }),
+  );
+}
+
+function markPullRequestMerged(pr: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pr,
+    state: "MERGED",
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+  };
+}
+
+function allChecksGreen(pr: PullRequestSummary): boolean {
+  return (
+    pr.checks.length > 0 &&
+    pr.checks.every((check) => {
+      const conclusion = (check.conclusion ?? "").toLowerCase();
+      return conclusion === "success" || conclusion === "neutral" || conclusion === "skipped";
+    })
   );
 }
 

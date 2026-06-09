@@ -1,16 +1,34 @@
 import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
 import {
   AssignWorkspaceToNamespaceInputSchema,
+  CheckoutContextInputSchema,
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
   CreateRepoInputSchema,
+  CreateReviewThreadInputSchema,
   CreateScheduledAgentInputSchema,
+  CreateWorkspaceCheckoutInputSchema,
   CreateWorkspaceInputSchema,
+  CwdContextInputSchema,
   LaunchAgentInputSchema,
+  LaunchArchitectAgentInputSchema,
+  LaunchImplementationAgentInputSchema,
+  LaunchPmAgentInputSchema,
+  LaunchPrototypeAgentInputSchema,
+  MarkCheckoutReadyForReviewInputSchema,
+  RegisterCheckoutReviewArtifactInputSchema,
+  RegisterWorkspacePlanInputSchema,
+  ReplyReviewThreadInputSchema,
+  ReportPlanDeviationInputSchema,
+  type ReviewAuthorKind,
+  type ReviewDiffMetadata,
+  ReviewThreadIdInputSchema,
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
+  UpdateTicketStatusInputSchema,
+  WorkspaceManagerControlInputSchema,
 } from "@citadel/contracts";
-import { fuzzySearchBlocks } from "@citadel/core";
+import { createId, fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import {
@@ -23,8 +41,10 @@ import {
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import type { TtydManager } from "@citadel/terminal";
+import { resolveCreateAgentSessionInputFromTemplates } from "./agent-session-template-resolver.js";
+import type { ProviderCache } from "./app-helpers.js";
 import { readLogSlice } from "./log-slice.js";
+import { readReviewDiffMetadata } from "./review-diff.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { refineScratchpad } from "./scratchpad-refine.js";
 import {
@@ -38,22 +58,29 @@ import {
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
+import { launchStructuredRoleAgent } from "./structured-role-launchers.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
   store: SqliteStore;
   operations: OperationService;
-  ttyd: TtydManager;
   scheduledAgents: ScheduledAgentRunner;
   scheduledAgentService: ScheduledAgentService;
-  providerCache: Map<string, { expiresAt: number; value: unknown }>;
+  providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
 };
 
+export type DaemonMcpCaller = "human" | "mcp" | "manager" | "agent" | "system";
+export type DaemonMcpCallContext = {
+  actor?: DaemonMcpCaller;
+};
+
 export function workspaceResource(store: SqliteStore) {
+  const workspaces = store.listWorkspaces();
   return serializeWorkspaceResource({
     repos: store.listRepos(),
-    workspaces: store.listWorkspaces(),
+    workspaces,
+    checkouts: workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id)),
     sessions: store.listSessions(),
   });
 }
@@ -79,8 +106,28 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
   return null;
 }
 
-export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
-  const { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
+function reviewAuthorKind(actor: DaemonMcpCaller): ReviewAuthorKind {
+  if (actor === "human") return "user";
+  if (actor === "system") return "system";
+  return "agent";
+}
+
+function findReviewMetadataFile(
+  metadata: ReviewDiffMetadata,
+  bucket: string,
+  filePath: string,
+  oldPath: string | null,
+) {
+  return (
+    metadata.sections
+      .flatMap((section) => section.files)
+      .find((file) => file.bucket === bucket && file.path === filePath && file.oldPath === oldPath) ?? null
+  );
+}
+
+export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, context: DaemonMcpCallContext = {}) {
+  const { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
+  const actor = context.actor ?? "mcp";
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -98,9 +145,231 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       throw error;
     }
   }
+  if (call.name === "list_workspace_checkouts") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    return { checkouts: store.listWorkspaceCheckouts(workspaceId) };
+  }
+  if (call.name === "create_workspace_checkout") {
+    try {
+      const result = await operations.createWorkspaceCheckout(
+        CreateWorkspaceCheckoutInputSchema.parse(call.arguments ?? {}),
+      );
+      emit("workspace.updated", { workspaceId: call.arguments?.workspaceId, checkoutId: result.checkoutId });
+      return result;
+    } catch (error) {
+      const structured = structuredWorkspaceError(error);
+      if (structured) return structured;
+      throw error;
+    }
+  }
+  if (call.name === "register_workspace_plan") {
+    const result = operations.registerWorkspacePlan(RegisterWorkspacePlanInputSchema.parse(call.arguments ?? {}), {
+      actor,
+    });
+    if (result.ok)
+      emit("workspace.plan.updated", {
+        workspaceId: result.planVersion.workspaceId,
+        planVersionId: result.planVersion.id,
+      });
+    return result;
+  }
+  if (call.name === "get_workspace_plan") {
+    return operations.getWorkspacePlan(call.arguments ?? {});
+  }
+  if (call.name === "get_citadel_context") {
+    const input = CwdContextInputSchema.parse(call.arguments ?? {});
+    return operations.getCitadelContext(input);
+  }
+  if (call.name === "report_plan_deviation") {
+    const result = operations.reportPlanDeviation(ReportPlanDeviationInputSchema.parse(call.arguments ?? {}));
+    if (result.ok)
+      emit("workspace.plan.deviation", { workspaceId: result.deviation.workspaceId, deviationId: result.deviation.id });
+    return result;
+  }
+  if (call.name === "start_workspace_manager") {
+    const result = operations.startWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager.workspaceId });
+    return result;
+  }
+  if (call.name === "pause_workspace_manager") {
+    const result = operations.pauseWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "resume_workspace_manager") {
+    const result = operations.resumeWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "get_checkout_gate_status") {
+    return operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+  }
+  if (call.name === "list_review_threads") {
+    const checkoutId = typeof call.arguments?.checkoutId === "string" ? call.arguments.checkoutId : "";
+    if (!checkoutId) return { error: "checkout_id_required" };
+    const checkout = store.findWorkspaceCheckout(checkoutId);
+    if (!checkout) return { error: "checkout_not_found" };
+    const metadata = readReviewDiffMetadata(store, checkoutId);
+    if (!metadata.reviewScope) return { reviewScope: null, threads: [] };
+    return {
+      reviewScope: metadata.reviewScope,
+      threads: store.listInternalReviewThreads(metadata.reviewScope.id, {
+        includeResolved: call.arguments?.includeResolved === true,
+        includeOutdated: call.arguments?.includeOutdated === true,
+      }),
+    };
+  }
+  if (call.name === "create_review_thread") {
+    const checkoutId = typeof call.arguments?.checkoutId === "string" ? call.arguments.checkoutId : "";
+    if (!checkoutId) return { error: "checkout_id_required" };
+    const checkout = store.findWorkspaceCheckout(checkoutId);
+    if (!checkout) return { error: "checkout_not_found" };
+    const metadata = readReviewDiffMetadata(store, checkoutId);
+    if (!metadata.reviewScope) return { error: "review_scope_required" };
+    const parsed = CreateReviewThreadInputSchema.parse({
+      authorKind: reviewAuthorKind(actor),
+      ...call.arguments,
+      checkoutId,
+    });
+    const file = findReviewMetadataFile(metadata, parsed.bucket, parsed.path, parsed.oldPath ?? null);
+    if (!file) return { error: "review_anchor_not_current" };
+    if (parsed.anchorKind === "line" && (!parsed.side || !parsed.startLine)) {
+      return { error: "line_anchor_requires_side_and_line" };
+    }
+    const now = new Date().toISOString();
+    const threadId = createId("thread");
+    const thread = store.createInternalReviewThread(
+      {
+        id: threadId,
+        reviewScopeId: metadata.reviewScope.id,
+        kind: "internal",
+        status: "open",
+        anchorState: "current",
+        anchorKind: parsed.anchorKind,
+        bucket: parsed.bucket,
+        path: parsed.path,
+        oldPath: parsed.oldPath ?? null,
+        side: parsed.side ?? null,
+        startLine: parsed.startLine ?? null,
+        endLine: parsed.endLine ?? parsed.startLine ?? null,
+        diffIdentity: file.id,
+        selectedText: parsed.selectedText ?? null,
+        authorKind: parsed.authorKind,
+        authorLabel: parsed.authorLabel ?? null,
+        providerThreadId: null,
+        resolvedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: createId("reply"),
+        threadId,
+        body: parsed.body,
+        authorKind: parsed.authorKind,
+        authorLabel: parsed.authorLabel ?? null,
+        providerCommentId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
+    emit("review.thread.created", { checkoutId, reviewScopeId: metadata.reviewScope.id, threadId: thread.id });
+    return { thread };
+  }
+  if (call.name === "reply_review_thread") {
+    const threadId = typeof call.arguments?.threadId === "string" ? call.arguments.threadId : "";
+    if (!threadId) return { error: "thread_id_required" };
+    const thread = store.findInternalReviewThread(threadId);
+    if (!thread) return { error: "review_thread_not_found" };
+    const parsed = ReplyReviewThreadInputSchema.parse({
+      authorKind: reviewAuthorKind(actor),
+      ...call.arguments,
+      threadId,
+    });
+    const now = new Date().toISOString();
+    const reply = store.addInternalReviewThreadReply({
+      id: createId("reply"),
+      threadId,
+      body: parsed.body,
+      authorKind: parsed.authorKind,
+      authorLabel: parsed.authorLabel ?? null,
+      providerCommentId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const nextThread =
+      call.arguments?.resolve === true ? store.setInternalReviewThreadStatus(threadId, "resolved", now) : null;
+    emit("review.thread.replied", { reviewScopeId: thread.reviewScopeId, threadId });
+    return { reply, thread: nextThread ?? store.findInternalReviewThread(threadId) };
+  }
+  if (call.name === "resolve_review_thread" || call.name === "reopen_review_thread") {
+    const parsed = ReviewThreadIdInputSchema.parse(call.arguments ?? {});
+    const thread = store.setInternalReviewThreadStatus(
+      parsed.threadId,
+      call.name === "resolve_review_thread" ? "resolved" : "open",
+      call.name === "resolve_review_thread" ? new Date().toISOString() : null,
+    );
+    if (!thread) return { error: "review_thread_not_found" };
+    emit(call.name === "resolve_review_thread" ? "review.thread.resolved" : "review.thread.reopened", {
+      reviewScopeId: thread.reviewScopeId,
+      threadId: thread.id,
+    });
+    return { thread };
+  }
+  if (call.name === "get_checkout_ticket") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, issue: gate.checkout.issue } : gate;
+  }
+  if (call.name === "get_checkout_pr") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, pr: gate.checkout.intendedPr } : gate;
+  }
+  if (call.name === "mark_checkout_ready_for_review") {
+    const result = operations.markCheckoutReadyForReview(
+      MarkCheckoutReadyForReviewInputSchema.parse(call.arguments ?? {}),
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.checkout.id });
+    return result;
+  }
+  if (call.name === "register_checkout_review_artifact") {
+    const result = operations.registerCheckoutReviewArtifact(
+      RegisterCheckoutReviewArtifactInputSchema.parse(call.arguments ?? {}),
+      { actor },
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.artifact.checkoutId });
+    return result;
+  }
+  if (call.name === "update_ticket_status") {
+    const result = operations.updateTicketStatus(UpdateTicketStatusInputSchema.parse(call.arguments ?? {}));
+    if (result.ok)
+      emit("ticket.updated", { workspaceId: call.arguments?.workspaceId, checkoutId: call.arguments?.checkoutId });
+    return result;
+  }
+  if (
+    call.name === "launch_pm_agent" ||
+    call.name === "launch_architect_agent" ||
+    call.name === "launch_implementation_agent" ||
+    call.name === "launch_prototype_agent"
+  ) {
+    const parsed =
+      call.name === "launch_pm_agent"
+        ? { role: "pm" as const, input: LaunchPmAgentInputSchema.parse(call.arguments ?? {}) }
+        : call.name === "launch_architect_agent"
+          ? { role: "architect" as const, input: LaunchArchitectAgentInputSchema.parse(call.arguments ?? {}) }
+          : call.name === "launch_implementation_agent"
+            ? {
+                role: "implementation" as const,
+                input: LaunchImplementationAgentInputSchema.parse(call.arguments ?? {}),
+              }
+            : { role: "prototype" as const, input: LaunchPrototypeAgentInputSchema.parse(call.arguments ?? {}) };
+    const result = await launchStructuredRoleAgent({ config, store, operations }, parsed, { actor });
+    if (result.ok) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.session.id });
+    return result;
+  }
   if (call.name === "start_agent_session") {
-    const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
-    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    const parsed = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
+    const input = await resolveCreateAgentSessionInputFromTemplates(config, parsed);
+    const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
     if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
     const session = await operations.createAgentSession(input, {
       command: runtime.command,
@@ -109,13 +378,14 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       promptArg: runtime.promptArg ?? null,
       sessionIdArg: runtime.sessionIdArg ?? null,
       resumeArg: runtime.resumeArg ?? null,
+      ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
   }
   if (call.name === "launch_agent") {
     const input = LaunchAgentInputSchema.parse(call.arguments ?? {});
-    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
     if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
     try {
       const result = await operations.launchAgent(input, {
@@ -125,6 +395,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
         promptArg: runtime.promptArg ?? null,
         sessionIdArg: runtime.sessionIdArg ?? null,
         resumeArg: runtime.resumeArg ?? null,
+        ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
       });
       emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
       if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
@@ -138,7 +409,6 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "stop_agent_session") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
     const result = operations.stopAgentSession({ sessionId });
-    ttyd.release(sessionId, "mcp-stop-agent-session");
     emit("agent.updated", { sessionId });
     return result;
   }
@@ -325,6 +595,14 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
     return result;
   }
+  if (call.name === "undeploy_app") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    const name = typeof call.arguments?.name === "string" ? call.arguments.name : undefined;
+    const result = await operations.undeployApp({ workspaceId, appName: name });
+    emit("workspace.deploy.undeploy", { workspaceId, operationId: result.operationId, status: result.status });
+    return result;
+  }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
     const message = typeof call.arguments?.message === "string" ? call.arguments.message : "";
@@ -412,15 +690,21 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     return slice;
   }
   const providerHealth = await collectProviderHealth(config.providers);
+  const workspaces = store.listWorkspaces();
   return callMcpTool(call, {
     repos: store.listRepos(),
-    workspaces: store.listWorkspaces(),
+    workspaces,
     sessions: store.listSessions(),
     operations: store.listOperations(),
     activity: store.listActivity(),
     providerHealth,
-    runtimes: listRuntimeHealth(config.runtimes),
+    runtimes: listRuntimeHealth(config.agentRuntimes),
     scheduledAgents: scheduledAgents.list(),
+    checkouts: workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id)),
+    workspacePlanVersions: workspaces.flatMap((workspace) => store.listWorkspacePlanVersions(workspace.id)),
+    managers: workspaces
+      .map((workspace) => store.getWorkspaceManager(workspace.id))
+      .filter((manager): manager is NonNullable<typeof manager> => Boolean(manager)),
     namespaces: store.listNamespaces(),
     scratchpadPath: effectiveNotesPath(config),
     // Per-session summary comes from the runtime's own transcript via the

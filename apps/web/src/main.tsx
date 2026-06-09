@@ -10,31 +10,43 @@ import {
   createRouter,
   useLocation,
 } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
+import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { Toaster } from "./components/ui/toast.js";
 import { TooltipProvider } from "./components/ui/tooltip.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { bootstrapMobileScratchpad } from "./lib/mobile-scratchpad-bootstrap.js";
+import { AgentTemplatesView } from "./routes/agents.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
+import { ReviewDiffView } from "./routes/review-diff.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
+import { handleShellTerminalShortcutMessage } from "./shell-terminal-shortcuts.js";
+import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
+import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import "./voice-mode.css";
 import "./chrome.css";
 import "./stage-terminal.css";
+import "./stage-empty-launcher.css";
+import "./structured-home-summary.css";
 import "./cockpit-extras.css";
 import "./pr-card-actions.css";
 import "./inspector-stats.css";
+import "./jira-picker.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";
 import "./inspector-meta.css";
@@ -51,11 +63,12 @@ import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
 import "./scratchpad.css";
 import "./scratchpad-drawer.css";
+import "./review-diff.css";
 import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
 // reads it synchronously on first render (e.g. useResolvedTheme used by
-// TerminalPane to spawn ttyd with the matching xterm palette) doesn't
+// TerminalPane to initialize xterm with the matching palette) doesn't
 // race ThemeControls's useEffect that writes the attribute later.
 (() => {
   applyThemePreference(readThemePreference());
@@ -69,10 +82,10 @@ const rootRoute = createRootRoute({
 
 // Pathless layout route whose component renders the Cockpit unconditionally
 // plus an overlay slot for any child route. Every non-index route mounts as
-// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// a child here, so the Cockpit (and the TerminalPane instances inside it) is
 // kept alive across navigations to Settings, Scratchpad, etc. Without this,
-// every route transition unmounted Cockpit → ttyd iframes were destroyed →
-// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+// every route transition unmounted Cockpit, destroyed the live terminal panes,
+// and forced a fresh attach on return.
 const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "cockpit-layout",
@@ -93,16 +106,33 @@ const settingsRoute = createRoute({
   component: SettingsView,
 });
 
+const agentsRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
+  path: "/agents",
+  component: AgentTemplatesView,
+});
+
 const repoSettingsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/repos/$repoId",
   component: RepoSettingsView,
 });
 
+const reviewDiffRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
+  path: "/workspaces/$workspaceId/checkouts/$checkoutId/review",
+  component: ReviewDiffView,
+});
+
 const operationsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
+  // Surfaces deep-links from elsewhere in the cockpit (e.g. the redeploy
+  // chip's "View log" link) — `?id=<operationId>` selects the matching row.
+  validateSearch: (search: Record<string, unknown>) => ({
+    id: typeof search.id === "string" ? search.id : undefined,
+  }),
 });
 
 const onboardingRoute = createRoute({
@@ -136,6 +166,17 @@ const scheduledAgentsRoute = createRoute({
 });
 
 function Shell() {
+  return (
+    <VoiceModeProvider>
+      <ShellContent />
+    </VoiceModeProvider>
+  );
+}
+
+function ShellContent() {
+  const { startDictation, stopDictation } = useVoiceMode();
+  const location = useLocation();
+  const voiceRouteHrefRef = useRef(location.href);
   // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
   // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
   // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
@@ -145,26 +186,46 @@ function Shell() {
     if (params.get("scratchpad") === "1") setScratchpadDrawerOpen(true);
   }, []);
 
+  useEffect(() => {
+    if (voiceRouteHrefRef.current === location.href) return;
+    voiceRouteHrefRef.current = location.href;
+    stopDictation({ commitFinal: false });
+  }, [location.href, stopDictation]);
+
   // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.
   // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're
   // not triggered on other routes.
   useEffect(() => {
+    const toggleScratchpad = () => {
+      toggleScratchpadDrawer();
+      syncDrawerToUrl(getScratchpadDrawerOpen());
+    };
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        toggleScratchpadDrawer();
-        syncDrawerToUrl(getScratchpadDrawerOpen());
+        toggleScratchpad();
       }
     };
+    const onMessage = (event: MessageEvent) => {
+      handleShellTerminalShortcutMessage(event, { startDictation, toggleScratchpad });
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [startDictation]);
 
   return (
-    <div className="app-root">
-      <Outlet />
-      <ScratchpadPanel />
-    </div>
+    <OptimisticRemoveProvider>
+      <ToastProvider>
+        <div className="app-root">
+          <Outlet />
+          <ScratchpadPanel />
+        </div>
+      </ToastProvider>
+    </OptimisticRemoveProvider>
   );
 }
 
@@ -197,7 +258,9 @@ function CockpitLayout() {
   const isIndex = location.pathname === "/" || location.pathname === "";
   return (
     <>
-      <Cockpit />
+      <div aria-hidden={!isIndex}>
+        <Cockpit />
+      </div>
       <div className="route-overlay" data-hidden={isIndex ? "" : undefined} aria-hidden={isIndex}>
         <Outlet />
       </div>
@@ -223,11 +286,13 @@ function NotFoundView() {
   );
 }
 
-// Restore the last visited route BEFORE the router boots so it picks the
-// correct initial location off the URL bar. The decision logic lives in
-// bootstrapLastRoute so it can be unit-tested independently.
+// Bootstrap the URL before the router boots so it picks the correct initial
+// location. Mobile scratchpad default-open runs first, then last-route restore
+// handles ordinary bare-root reloads.
 if (typeof window !== "undefined") {
-  bootstrapLastRoute(window.location, window.history);
+  if (!bootstrapMobileScratchpad(window.location, window.history)) {
+    bootstrapLastRoute(window.location, window.history);
+  }
 }
 
 // Base routes always shipped. Dev-only routes are appended below behind a
@@ -239,7 +304,9 @@ const childRoutes: AnyRoute[] = [
   cockpitLayoutRoute.addChildren([
     indexRoute,
     settingsRoute,
+    agentsRoute,
     repoSettingsRoute,
+    reviewDiffRoute,
     operationsRoute,
     onboardingRoute,
     dashboardRoute,

@@ -1,11 +1,13 @@
 import type { Namespace, Workspace } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Archive, ArchiveRestore, Check, FolderPlus, Pencil, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, FolderPlus, GripVertical, Pencil, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
 import { Button } from "./components/ui/button.js";
+import { NAMESPACE_REORDER_MIME, isNamespaceReorderDrag, namespaceIdsAfterMove } from "./namespace-order.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 export function NamespacesView(props: { data: StateResponse | undefined }) {
@@ -57,10 +59,24 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
+  const reorder = useMutation({
+    mutationFn: (namespaceIds: string[]) =>
+      api("/api/namespaces/reorder", {
+        method: "POST",
+        body: JSON.stringify({ namespaceIds }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
   const handleDrop = (event: React.DragEvent, namespaceId: string | null) => {
     event.preventDefault();
     setDropTargetKey(null);
+    const draggedNamespaceId = event.dataTransfer.getData(NAMESPACE_REORDER_MIME);
+    if (draggedNamespaceId && namespaceId) {
+      const namespaceIds = namespaceIdsAfterMove(data?.namespaces ?? [], draggedNamespaceId, namespaceId);
+      if (namespaceIds) reorder.mutate(namespaceIds);
+      return;
+    }
     const workspaceId = event.dataTransfer.getData("application/x-citadel-workspace-id");
     if (!workspaceId) return;
     const workspace = data?.workspaces.find((entry) => entry.id === workspaceId);
@@ -128,7 +144,11 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
             key={group.key}
             className={`namespace-card ${dropTargetKey === group.key ? "drop-hover" : ""}`}
             onDragOver={(event) => {
-              if (event.dataTransfer.types.includes("application/x-citadel-workspace-id")) {
+              const types = Array.from(event.dataTransfer.types);
+              if (
+                (group.namespace && isNamespaceReorderDrag(types)) ||
+                types.includes("application/x-citadel-workspace-id")
+              ) {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
                 setDropTargetKey(group.key);
@@ -148,6 +168,20 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
                 />
               ) : (
                 <>
+                  {group.namespace ? (
+                    <span
+                      className="namespace-card-drag"
+                      draggable
+                      title="Reorder namespace"
+                      onDragStart={(event) => {
+                        if (!group.namespace) return;
+                        event.dataTransfer.setData(NAMESPACE_REORDER_MIME, group.namespace.id);
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
+                    >
+                      <GripVertical size={13} />
+                    </span>
+                  ) : null}
                   <strong>{group.label}</strong>
                   <span className="namespace-card-count">{group.workspaces.length}</span>
                   {group.namespace ? (
@@ -263,6 +297,7 @@ function ConfirmArchiveDialog(props: {
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  useOverlayPresent();
   return (
     <div className="drop-workspace-backdrop" onMouseDown={props.onCancel}>
       <dialog

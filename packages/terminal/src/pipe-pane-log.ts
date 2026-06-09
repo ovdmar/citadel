@@ -23,17 +23,17 @@ export function pipePaneLogPath(sessionName: string): string {
 // Returns { scanned, removed }. A missing directory is treated as no-op
 // (zeros). Per-file errors (ENOENT race against another sweep, EPERM on a
 // foreign file in $TMPDIR) are swallowed; we still count the scan attempt.
-export function sweepPtyLogs(maxAgeMs: number): { scanned: number; removed: number } {
+export function sweepPtyLogs(maxAgeMs: number, dir = PIPE_PANE_LOG_DIR): { scanned: number; removed: number } {
   let entries: string[];
   try {
-    entries = fs.readdirSync(PIPE_PANE_LOG_DIR);
+    entries = fs.readdirSync(dir);
   } catch {
     return { scanned: 0, removed: 0 };
   }
   const cutoff = Date.now() - maxAgeMs;
   let removed = 0;
   for (const entry of entries) {
-    const filePath = path.join(PIPE_PANE_LOG_DIR, entry);
+    const filePath = path.join(dir, entry);
     try {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) continue;
@@ -47,7 +47,7 @@ export function sweepPtyLogs(maxAgeMs: number): { scanned: number; removed: numb
   return { scanned: entries.length, removed };
 }
 
-export function attachPipePaneLog(sessionName: string): void {
+export function attachPipePaneLog(sessionName: string, socketName?: string | null): void {
   fs.mkdirSync(PIPE_PANE_LOG_DIR, { recursive: true });
   const logPath = pipePaneLogPath(sessionName);
   // Truncate any stale log from a previous incarnation of this session name.
@@ -59,7 +59,7 @@ export function attachPipePaneLog(sessionName: string): void {
   // Default direction is "-O" (pane → command). Omitting -o means we always
   // replace any existing pipe rather than no-op, so re-attach is idempotent.
   const shellCmd = `cat >> ${shellQuote(logPath)}`;
-  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
+  execFileSync("tmux", [...tmuxPrefix(socketName), "pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
 }
 
 // Return the tail of the pipe-pane log (or empty string if unavailable). Used

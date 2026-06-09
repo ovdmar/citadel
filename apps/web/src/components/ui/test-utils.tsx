@@ -3,7 +3,7 @@
 // dependency-free (no @testing-library/react). Each helper is small
 // enough to read in a single screen.
 
-import { act } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 
 // React 18+ requires consumers to opt-in to act() outside production. Vitest
@@ -25,32 +25,32 @@ export function render(node: React.ReactNode): RenderResult {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  act(() => {
+  flushSync(() => {
     root.render(node);
   });
   return {
     container,
     root,
     unmount() {
-      act(() => root.unmount());
+      flushSync(() => root.unmount());
       container.remove();
     },
     rerender(next) {
-      act(() => root.render(next));
+      flushSync(() => root.render(next));
     },
   };
 }
 
 export function fireClick(el: Element | null | undefined): void {
   if (!el) throw new Error("fireClick: element is null");
-  act(() => {
+  flushSync(() => {
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
 
 export function pressKey(el: Element | null | undefined, key: string): void {
   if (!el) throw new Error("pressKey: element is null");
-  act(() => {
+  flushSync(() => {
     el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
     el.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
   });

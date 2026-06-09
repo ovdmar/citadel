@@ -1,4 +1,4 @@
-import type { CreateNamespaceInput, Namespace, UpdateNamespaceInput } from "@citadel/contracts";
+import type { CreateNamespaceInput, Namespace, ReorderNamespacesInput, UpdateNamespaceInput } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 
@@ -12,6 +12,9 @@ export type AssignWorkspaceResult =
   | { assigned: false; reason: "workspace_not_found" | "namespace_not_found" | "namespace_archived" };
 
 export type CreateNamespaceResult = { namespace: Namespace; created: boolean };
+export type ReorderNamespacesResult =
+  | { reordered: true; namespaces: Namespace[] }
+  | { reordered: false; reason: "namespace_not_found" | "namespace_archived" | "namespace_order_mismatch" };
 
 export function listNamespaces(store: SqliteStore, includeArchived = false): Namespace[] {
   return store.listNamespaces(includeArchived);
@@ -35,6 +38,7 @@ export function createNamespace(deps: NamespaceServiceDeps, input: CreateNamespa
     id: createId("ns"),
     name,
     color: input.color ?? null,
+    position: nextNamespacePosition(deps.store.listNamespaces(true)),
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
@@ -69,6 +73,27 @@ export function archiveNamespace(deps: NamespaceServiceDeps, id: string): Namesp
   return archived;
 }
 
+export function reorderNamespaces(deps: NamespaceServiceDeps, input: ReorderNamespacesInput): ReorderNamespacesResult {
+  const namespaces = deps.store.listNamespaces(true);
+  const byId = new Map(namespaces.map((namespace) => [namespace.id, namespace]));
+  if (new Set(input.namespaceIds).size !== input.namespaceIds.length) {
+    return { reordered: false, reason: "namespace_order_mismatch" };
+  }
+  for (const id of input.namespaceIds) {
+    const namespace = byId.get(id);
+    if (!namespace) return { reordered: false, reason: "namespace_not_found" };
+    if (namespace.archivedAt) return { reordered: false, reason: "namespace_archived" };
+  }
+  const activeIds = namespaces.filter((namespace) => !namespace.archivedAt).map((namespace) => namespace.id);
+  if (activeIds.length !== input.namespaceIds.length) return { reordered: false, reason: "namespace_order_mismatch" };
+  const expected = new Set(activeIds);
+  if (input.namespaceIds.some((id) => !expected.has(id)))
+    return { reordered: false, reason: "namespace_order_mismatch" };
+  const reordered = deps.store.reorderNamespaces(input.namespaceIds);
+  deps.activity("namespace.reordered", "Reordered namespaces");
+  return { reordered: true, namespaces: reordered };
+}
+
 export function assignWorkspaceToNamespace(
   deps: NamespaceServiceDeps,
   input: { workspaceId: string; namespaceId: string | null },
@@ -85,4 +110,9 @@ export function assignWorkspaceToNamespace(
   const label = input.namespaceId ? `namespace ${input.namespaceId}` : "no namespace";
   deps.activity("namespace.assigned", `Assigned workspace ${workspace.name} to ${label}`);
   return { assigned: true, workspaceId: input.workspaceId, namespaceId: input.namespaceId };
+}
+
+function nextNamespacePosition(namespaces: readonly Namespace[]): number {
+  const max = namespaces.reduce((current, namespace) => Math.max(current, namespace.position), 0);
+  return max + 1024;
 }

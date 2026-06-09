@@ -14,13 +14,32 @@ import { shellQuote, tmuxPrefix, waitForPaneCommand, waitForTerminalIdle } from 
 // runtime binary names still match.
 export const COMM_TRUNCATION = 15;
 
-// Env tokens preserved byte-for-byte from the legacy wrapper at
-// packages/terminal/src/index.ts:131. Dropping any one of these produces a
-// visible TUI rendering regression in claude/codex (verified against the
-// wrapper before the shell-first refactor).
-const COLOR_ENV_PREFIX = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
+// Env tokens preserved from the legacy wrapper at packages/terminal/src/index.ts:131.
+// Dropping any one of these produces a visible TUI rendering regression in
+// claude/codex (verified against the wrapper before the shell-first refactor).
+const COLOR_ENV_UNSETS = ["NO_COLOR"];
+const COLOR_ENV_ASSIGNMENTS = ["TERM=xterm-256color", "COLORTERM=truecolor", "FORCE_COLOR=1", "CLICOLOR_FORCE=1"];
 
 export type PanePidProcess = { command: string; pid: number };
+export type AgentExitHint = { runtimeId: string; runtimeSessionId?: string | null };
+
+const CLAUDE_EXIT_MESSAGE_PREFIX = "[citadel] Agent exited. Run any command, or restart the agent";
+const CLAUDE_INTERACTIVE_EXIT_MESSAGE = `${CLAUDE_EXIT_MESSAGE_PREFIX} (e.g. \`claude resume\` to pick a session interactively).`;
+const GENERIC_EXIT_MESSAGE = "[citadel] Agent exited. Run any command, or restart the agent from Citadel.";
+
+export function agentExitHintCommand(hint: AgentExitHint): string {
+  if (hint.runtimeId !== "claude-code") {
+    return `printf '\\n%s\\n' ${shellQuote(GENERIC_EXIT_MESSAGE)}`;
+  }
+  if (hint.runtimeSessionId) {
+    return `printf '\\n%s\\n' ${shellQuote(`${CLAUDE_EXIT_MESSAGE_PREFIX} (e.g. \`claude resume ${hint.runtimeSessionId}\`).`)}`;
+  }
+  return [
+    '__citadel_project_dir="$HOME/.claude/projects/$(printf %s "$PWD" | sed \'s/[^A-Za-z0-9]/-/g\')"',
+    '__citadel_latest="$(ls -t "$__citadel_project_dir"/*.jsonl 2>/dev/null | head -n 1)"',
+    `if [ -n "$__citadel_latest" ]; then __citadel_sid="\${__citadel_latest##*/}"; __citadel_sid="\${__citadel_sid%.jsonl}"; printf '\\n[citadel] Agent exited. Run any command, or restart the agent (e.g. \`claude resume %s\`).\\n' "$__citadel_sid"; else printf '\\n%s\\n' ${shellQuote(CLAUDE_INTERACTIVE_EXIT_MESSAGE)}; fi`,
+  ].join("; ");
+}
 
 /**
  * Read the foreground process info for a tmux pane via a single
@@ -29,11 +48,11 @@ export type PanePidProcess = { command: string; pid: number };
  * tmux IO error). The caller is responsible for treating null as the
  * tmux-missing signal (which maps to `status: 'unknown'`, NEVER `stopped`).
  */
-export function panePidProcess(sessionName: string): PanePidProcess | null {
+export function panePidProcess(sessionName: string, socketName?: string | null): PanePidProcess | null {
   try {
     const raw = execFileSync(
       "tmux",
-      [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{pane_current_command} #{pane_pid}"],
+      [...tmuxPrefix(socketName), "display-message", "-p", "-t", sessionName, "#{pane_current_command} #{pane_pid}"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
     if (!raw) return null;
@@ -65,15 +84,60 @@ export async function launchAgentInSession(
   sessionName: string,
   runtimeBinary: string,
   argv: string[],
-  options: { timeoutMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    socketName?: string | null;
+    env?: Record<string, string | null | undefined>;
+    exitHint?: AgentExitHint;
+  } = {},
 ): Promise<void> {
   if (!runtimeBinary) throw new Error("launchAgentInSession requires a runtimeBinary");
-  await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200 });
-  const cmd = [COLOR_ENV_PREFIX, shellQuote(runtimeBinary), ...argv.map(shellQuote)].join(" ");
-  execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, cmd, "Enter"], { stdio: "ignore" });
+  await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200, socketName: options.socketName ?? null });
+  const launchCmd = [
+    "env",
+    ...envUnsetArgs(options.env),
+    ...COLOR_ENV_UNSETS.flatMap((key) => ["-u", key]),
+    ...COLOR_ENV_ASSIGNMENTS,
+    ...envAssignmentArgs(options.env),
+    shellQuote(runtimeBinary),
+    ...argv.map(shellQuote),
+  ].join(" ");
+  const cmd = options.exitHint ? `${launchCmd}; ${agentExitHintCommand(options.exitHint)}` : launchCmd;
+  execFileSync("tmux", [...tmuxPrefix(options.socketName), "send-keys", "-t", sessionName, cmd, "Enter"], {
+    stdio: "ignore",
+  });
   // Positive predicate against the comm-truncated runtime binary.
   const target = runtimeBinary.slice(0, COMM_TRUNCATION);
-  await waitForPaneCommand(sessionName, (cur) => cur === target, { timeoutMs: options.timeoutMs ?? 5000 });
+  const observed = await waitForPaneCommand(sessionName, (cur) => cur === target, {
+    timeoutMs: options.timeoutMs ?? 5000,
+    socketName: options.socketName ?? null,
+  });
+  if (observed !== target) {
+    throw new Error(`runtime_not_ready: expected ${target}, observed ${observed || "none"}`);
+  }
+}
+
+function envUnsetArgs(env: Record<string, string | null | undefined> | undefined): string[] {
+  if (!env) return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`Invalid environment variable name: ${key}`);
+    if (value === null) {
+      out.push("-u", key);
+    }
+  }
+  return out;
+}
+
+function envAssignmentArgs(env: Record<string, string | null | undefined> | undefined): string[] {
+  if (!env) return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`Invalid environment variable name: ${key}`);
+    if (value === null || value === undefined) continue;
+    out.push(shellQuote(`${key}=${value}`));
+  }
+  return out;
 }
 
 // One-time sweep of leftover /tmp/citadel-agent-*.{live,exit} files from the

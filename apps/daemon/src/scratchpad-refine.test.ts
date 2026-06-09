@@ -8,14 +8,26 @@ import type { LaunchAgentInput, ProviderHealth, Repo } from "@citadel/contracts"
 import { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listCitadelActions, updateCitadelAction } from "./citadel-actions.js";
+
+const runtimeHealthOverrides = vi.hoisted(
+  () =>
+    new Map<
+      string,
+      {
+        health: "healthy" | "degraded" | "unavailable" | "unknown";
+        healthReason: string | null;
+      }
+    >(),
+);
 
 // Stub `listRuntimeHealth` so the tests don't shell out to `bash -lc command -v …`
 // for every case (each call costs ~300ms loading the user's login profile,
 // which CPU-starves the rest of the suite and times out parallel tests like
 // scheduled-agent-routes). The fake mirrors the production shape but reports
 // runtimes as healthy iff they are present in the config — the refine module's
-// own "runtime in config" check still runs, so the runtime_unavailable
-// branches are exercised exactly as in production.
+// own "runtime in config" check still runs. Individual tests can override a
+// runtime's health to exercise fallback behavior without invoking real CLIs.
 vi.mock("@citadel/runtimes", async () => {
   const actual = await vi.importActual<typeof import("@citadel/runtimes")>("@citadel/runtimes");
   return {
@@ -28,8 +40,8 @@ vi.mock("@citadel/runtimes", async () => {
         displayName: r.displayName,
         command: r.command,
         args: r.args,
-        health: "healthy" as const,
-        healthReason: null,
+        health: runtimeHealthOverrides.get(r.id)?.health ?? ("healthy" as const),
+        healthReason: runtimeHealthOverrides.get(r.id)?.healthReason ?? null,
         capabilities: {} as Record<string, never>,
       })),
   };
@@ -44,7 +56,8 @@ type FakeOps = Pick<OperationService, "launchAgent" | "removeWorkspace">;
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  runtimeHealthOverrides.clear();
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function makeRepoOnDisk(dir: string): string {
@@ -60,7 +73,13 @@ function makeRepoOnDisk(dir: string): string {
   return repoPath;
 }
 
-function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean }) {
+type RuntimeFixture = CitadelConfig["agentRuntimes"][number];
+
+const claudeRuntime: RuntimeFixture = { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] };
+const codexRuntime: RuntimeFixture = { id: "codex", displayName: "Codex", command: "codex", args: ["--yolo"] };
+const bashRuntime: RuntimeFixture = { id: "bash-agent", displayName: "Bash Agent", command: "bash", args: ["-l"] };
+
+function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean; agentRuntimes?: RuntimeFixture[] }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-refine-"));
   dirs.push(dir);
   const configPath = path.join(dir, "citadel.config.json");
@@ -73,16 +92,11 @@ function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean })
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  // Only seed claude-code when the caller wants it (so we can exercise the
-  // runtime_unavailable branch without it).
-  // `command: "bash"` so `listRuntimeHealth`'s PATH check passes on every CI
-  // box (we only care about exercising the id/health branches, not the real
-  // claude-code binary).
-  config.runtimes = opts?.withClaudeRuntime
-    ? [{ id: "claude-code", displayName: "Claude Code", command: "bash", args: ["-c", "true"] }]
-    : [];
+  // Only seed agent runtimes when the caller wants them (so we can exercise the
+  // runtime_unavailable branches without depending on local binaries).
+  config.agentRuntimes = opts?.agentRuntimes ?? (opts?.withClaudeRuntime ? [claudeRuntime] : []);
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   let repoId: string | undefined;
@@ -113,7 +127,7 @@ function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean })
 const noopHealth = async (): Promise<ProviderHealth[]> => [];
 
 describe("refineScratchpad — degradation matrix", () => {
-  it("returns runtime_unavailable when claude-code is not configured", async () => {
+  it("returns runtime_unavailable when no agent runtime is configured", async () => {
     const { config, store } = makeFixture({ withClaudeRuntime: false, withRepo: true });
     const operations: FakeOps = {
       launchAgent: vi.fn(),
@@ -171,6 +185,77 @@ describe("refineScratchpad — degradation matrix", () => {
     const launchInput = launchAgent.mock.calls[0]?.[0] as LaunchAgentInput;
     expect(launchInput.runtimeId).toBe("claude-code");
     expect(launchInput.workspaceName).toMatch(/^refine-scratchpad-/);
+  });
+
+  it("falls back to the next configured agent runtime when the preferred action runtime is unavailable", async () => {
+    runtimeHealthOverrides.set("claude-code", {
+      health: "unavailable",
+      healthReason: "Claude subscription access is disabled",
+    });
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, codexRuntime], withRepo: true });
+    const launchAgent = vi.fn(async (_input: LaunchAgentInput, _runtime: { displayName: string }) => ({
+      workspaceId: "ws-codex",
+      sessionId: "session-codex",
+      operationId: "op-codex",
+      workspace: { id: "ws-codex", name: "x" },
+    }));
+    const operations: FakeOps = { launchAgent, removeWorkspace: vi.fn() } as unknown as FakeOps;
+
+    const result = await refineScratchpad(
+      { config, store, operations: operations as unknown as OperationService, providerHealth: noopHealth },
+      { ...(repoId ? { repoId } : {}), prompt: "refine — skip blocks tagged in-progress" },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.warning).toContain("Launched 'codex' instead");
+    const launchInput = launchAgent.mock.calls[0]?.[0] as LaunchAgentInput;
+    const runtime = launchAgent.mock.calls[0]?.[1] as { displayName: string };
+    expect(launchInput.runtimeId).toBe("codex");
+    expect(runtime.displayName).toBe("Codex");
+  });
+
+  it("honors the saved action runtime preference when it is available", async () => {
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, codexRuntime], withRepo: true });
+    const [action] = await listCitadelActions(config.dataDir);
+    if (!action) throw new Error("expected seeded action");
+    await updateCitadelAction(config.dataDir, action.id, { runtimeId: "codex", updatedAt: action.updatedAt });
+    const launchAgent = vi.fn(async (_input: LaunchAgentInput) => ({
+      workspaceId: "ws-codex",
+      sessionId: "session-codex",
+      operationId: "op-codex",
+      workspace: { id: "ws-codex", name: "x" },
+    }));
+    const operations: FakeOps = { launchAgent, removeWorkspace: vi.fn() } as unknown as FakeOps;
+
+    const result = await refineScratchpad(
+      { config, store, operations: operations as unknown as OperationService, providerHealth: noopHealth },
+      { ...(repoId ? { repoId } : {}), prompt: "refine — skip blocks tagged in-progress" },
+    );
+
+    expect(result.ok).toBe(true);
+    const launchInput = launchAgent.mock.calls[0]?.[0] as LaunchAgentInput;
+    expect(launchInput.runtimeId).toBe("codex");
+  });
+
+  it("does not fall back to a plain shell command", async () => {
+    runtimeHealthOverrides.set("claude-code", {
+      health: "unavailable",
+      healthReason: "Claude subscription access is disabled",
+    });
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, bashRuntime], withRepo: true });
+    const operations: FakeOps = { launchAgent: vi.fn(), removeWorkspace: vi.fn() } as unknown as FakeOps;
+
+    const result = await refineScratchpad(
+      { config, store, operations: operations as unknown as OperationService, providerHealth: noopHealth },
+      { ...(repoId ? { repoId } : {}), prompt: "refine — skip blocks tagged in-progress" },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("runtime_unavailable");
+      expect(result.detail).toContain("No other configured agent runtime is available");
+    }
+    expect(operations.launchAgent).not.toHaveBeenCalled();
   });
 
   it("succeeds with no warning when the prompt mentions in-progress", async () => {

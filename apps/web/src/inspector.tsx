@@ -1,18 +1,21 @@
 import type {
-  AgentSession,
+  PullRequestSummary,
   Repo,
   Workspace,
   WorkspaceCockpitSummary,
   WorkspaceDiff,
   WorkspaceRecentCommits,
+  WorkspaceSession,
 } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, RefreshCw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, queryClient } from "./api.js";
+import { api } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
 import { InspectorPrSection } from "./inspector-pr.js";
 import { type InspectorTab, InspectorTabs } from "./inspector-tabs.js";
+import { IssueAttachSlot } from "./jira-picker.js";
 
 // Re-export so existing consumers (incl. inspector.test.ts) keep working.
 export { aggregateReviewerCounts } from "./inspector-reviewers.js";
@@ -20,8 +23,14 @@ export { aggregateReviewerCounts } from "./inspector-reviewers.js";
 export function Inspector(props: {
   workspace: Workspace;
   repo: Repo | null;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   summary: WorkspaceCockpitSummary | undefined;
+  reviewCheckoutId: string | null;
+  targetCheckoutId: string | null;
+  targetPullRequest: PullRequestSummary | null;
+  targetPullRequestCheckedAt: string | undefined;
+  targetBranch: string;
+  targetBaseBranch: string;
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
@@ -35,9 +44,24 @@ export function Inspector(props: {
       <InspectorTabs tab={tab} onTabChange={setTab} fileCount={fileCount} onCollapse={props.onCollapse} />
       <div className="column-body">
         {tab === "stats" ? (
-          <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} diff={diff.data} />
+          <StatsTab
+            workspace={props.workspace}
+            repo={props.repo}
+            summary={props.summary}
+            diff={diff.data}
+            checkoutId={props.targetCheckoutId}
+            targetPullRequest={props.targetPullRequest}
+            targetPullRequestCheckedAt={props.targetPullRequestCheckedAt}
+            targetBranch={props.targetBranch}
+            targetBaseBranch={props.targetBaseBranch}
+          />
         ) : (
-          <DiffTab workspace={props.workspace} summary={props.summary} diff={diff.data} />
+          <DiffTab
+            workspace={props.workspace}
+            summary={props.summary}
+            diff={diff.data}
+            reviewCheckoutId={props.reviewCheckoutId}
+          />
         )}
       </div>
     </>
@@ -49,8 +73,13 @@ function StatsTab(props: {
   repo: Repo | null;
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
+  checkoutId: string | null;
+  targetPullRequest: PullRequestSummary | null;
+  targetPullRequestCheckedAt: string | undefined;
+  targetBranch: string;
+  targetBaseBranch: string;
 }) {
-  const pr = props.summary?.versionControl.pullRequest ?? null;
+  const pr = props.targetPullRequest;
   const additions = pr?.additions ?? 0;
   const deletions = pr?.deletions ?? 0;
   const apps = props.summary?.apps;
@@ -80,6 +109,7 @@ function StatsTab(props: {
         issueTitle={issueTitle}
         issueStatus={issueStatus}
         issueUrl={issueUrl}
+        transitions={props.summary?.issueTracker?.transitions ?? []}
       />
 
       <div className="inspector-body">
@@ -89,7 +119,10 @@ function StatsTab(props: {
           diffFiles={diffFiles}
           diffAdded={diffAdded}
           diffRemoved={diffRemoved}
-          checkedAt={props.summary?.versionControl.checkedAt}
+          checkedAt={props.targetPullRequestCheckedAt}
+          checkoutId={props.checkoutId}
+          targetBranch={props.targetBranch}
+          targetBaseBranch={props.targetBaseBranch}
         />
 
         {apps?.applications.length ? (
@@ -119,7 +152,7 @@ function StatsTab(props: {
           </section>
         ) : null}
 
-        <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
+        <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} checkoutId={props.checkoutId} />
 
         <section className="ins-section">
           <div className="ins-section-head">
@@ -159,138 +192,6 @@ function StatsTab(props: {
   );
 }
 
-function IssueAttachSlot(props: {
-  workspaceId: string;
-  issueKey: string | null;
-  issueTitle: string | null;
-  issueStatus: string | null;
-  issueUrl: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const [keyDraft, setKeyDraft] = useState("");
-  const [urlDraft, setUrlDraft] = useState("");
-  const keyInputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (open) keyInputRef.current?.focus();
-  }, [open]);
-
-  const attach = useMutation({
-    mutationFn: (input: { issueKey: string; issueUrl: string | null }) =>
-      api(`/api/workspaces/${props.workspaceId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          issueKey: input.issueKey,
-          issueUrl: input.issueUrl,
-          issueTitle: null,
-        }),
-      }),
-    onSuccess: () => {
-      setOpen(false);
-      setKeyDraft("");
-      setUrlDraft("");
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-    },
-  });
-
-  if (props.issueKey) {
-    return (
-      <div className="inspector-attach">
-        <a
-          className="cit-jira"
-          href={props.issueUrl ?? undefined}
-          target="_blank"
-          rel="noreferrer"
-          title={`Open ${props.issueKey}${props.issueTitle ? `: ${props.issueTitle}` : ""}`}
-        >
-          <span className="cit-jira-icon" aria-hidden>
-            <svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Issue tracker">
-              <title>Issue tracker</title>
-              <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="oklch(50% 0.16 250)" />
-              <path
-                d="M5 8.2l2 2 4-4"
-                fill="none"
-                stroke="#fff"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <span className="cit-jira-text">
-            <span className="cit-jira-key">{props.issueKey}</span>
-            {props.issueTitle ? <span className="cit-jira-title">{props.issueTitle}</span> : null}
-          </span>
-          <span
-            className={`cit-jira-status cit-jira-status--${props.issueStatus ? jiraStatusTone(props.issueStatus) : "unknown"}`}
-            title={props.issueStatus ? `Issue status: ${props.issueStatus}` : "Status not synced"}
-          >
-            {props.issueStatus ?? "—"}
-          </span>
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <div className="inspector-attach">
-        <button
-          type="button"
-          className="cit-jira cit-jira--empty"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          title="Attach a Jira ticket to this workspace"
-        >
-          <span className="cit-jira-empty-mark" aria-hidden>
-            <Plus size={11} />
-          </span>
-          <span className="cit-jira-empty-text">
-            <span className="cit-jira-empty-title">Attach Jira ticket</span>
-            <span className="cit-jira-empty-hint">link an issue to this workspace</span>
-          </span>
-        </button>
-      </div>
-      {open ? (
-        <form
-          className="cit-jira-attach-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const key = keyDraft.trim();
-            if (!key) return;
-            attach.mutate({ issueKey: key, issueUrl: urlDraft.trim() || null });
-          }}
-        >
-          <label>
-            Issue key
-            <input
-              ref={keyInputRef}
-              value={keyDraft}
-              onChange={(event) => setKeyDraft(event.target.value)}
-              placeholder="ABC-123"
-            />
-          </label>
-          <label>
-            Issue URL (optional)
-            <input
-              value={urlDraft}
-              onChange={(event) => setUrlDraft(event.target.value)}
-              placeholder="https://jira.example/browse/ABC-123"
-            />
-          </label>
-          <div className="cit-jira-attach-actions">
-            <button type="button" onClick={() => setOpen(false)} disabled={attach.isPending}>
-              Cancel
-            </button>
-            <button type="submit" data-primary disabled={!keyDraft.trim() || attach.isPending}>
-              {attach.isPending ? "Attaching…" : "Attach"}
-            </button>
-          </div>
-        </form>
-      ) : null}
-    </>
-  );
-}
-
 export function shortenRelative(value: string) {
   if (!value) return "";
   // git's "ago" strings (e.g. "3 minutes ago") read better trimmed in the chip.
@@ -305,14 +206,10 @@ export function shortenRelative(value: string) {
     .replace(/(\d+) seconds?/, "$1s");
 }
 
-function jiraStatusTone(status: string): "todo" | "progress" | "review" | "done" | "blocked" {
-  const s = status.toLowerCase();
-  if (s.includes("done") || s.includes("closed") || s.includes("resolved")) return "done";
-  if (s.includes("review")) return "review";
-  if (s.includes("progress") || s.includes("doing")) return "progress";
-  if (s.includes("block")) return "blocked";
-  return "todo";
-}
+// CheckSummaryIcon + summarizeChecks moved to inspector-pr.js during the
+// PR-section extraction on main. jiraStatusTone moved to jira-picker.tsx
+// during the picker extraction on this branch. Neither belongs here
+// anymore.
 
 function sumDiffLines(diff: WorkspaceDiff | undefined, prefix: "+" | "-"): number {
   if (!diff) return 0;
@@ -325,6 +222,7 @@ function DiffTab(props: {
   workspace: Workspace;
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
+  reviewCheckoutId: string | null;
 }) {
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
@@ -369,9 +267,17 @@ function DiffTab(props: {
       </section>
       <section className="inspector-block">
         <h4>Human review</h4>
-        <div className="empty compact">
-          Full-screen review with inline comments visible to the agent is planned. Open the PR for now.
-        </div>
+        {props.reviewCheckoutId ? (
+          <Link
+            className="settings-link"
+            to="/workspaces/$workspaceId/checkouts/$checkoutId/review"
+            params={{ workspaceId: props.workspace.id, checkoutId: props.reviewCheckoutId }}
+          >
+            Open review
+          </Link>
+        ) : (
+          <div className="empty compact">Pick a checkout to review.</div>
+        )}
       </section>
     </div>
   );

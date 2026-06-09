@@ -177,7 +177,6 @@ function RepoStep(props: {
         body: JSON.stringify({
           rootPath,
           name: name || undefined,
-          worktreeParent: inspect.data?.suggestedWorktreeParent,
         }),
       }),
     onSuccess: (result) => {
@@ -236,7 +235,7 @@ function RepoStep(props: {
               <>
                 <small>default branch: {inspect.data.defaultBranch ?? "?"}</small>
                 <small>remotes: {inspect.data.remotes.join(", ") || "(none)"}</small>
-                <small>worktree parent will be {inspect.data.suggestedWorktreeParent}</small>
+                <small>default worktree parent: {inspect.data.suggestedWorktreeParent}</small>
               </>
             ) : (
               <small>{inspect.data.exists ? "Not a git repository" : "Path does not exist"}</small>

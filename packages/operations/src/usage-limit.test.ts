@@ -15,12 +15,14 @@ function session(over: Partial<AgentSession>): AgentSession {
     endedAt: null,
     exitCode: null,
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "tmux-sess-1",
     tmuxSessionId: "$1",
     runtimeSessionId: "uuid-1",
     createdAt: "2026-05-26T03:00:00.000Z",
     updatedAt: "2026-05-26T04:00:00.000Z",
     ...over,
+    kind: "agent",
   } satisfies AgentSession;
 }
 

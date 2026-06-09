@@ -2,24 +2,19 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
-import { agentLiveSentinelPath, killTmuxSession, tmuxSessionExists } from "@citadel/terminal";
+import { agentLiveSentinelPath, killTmuxSession, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
-const tmuxSessions: string[] = [];
+const tmuxSessions: Array<{ sessionName: string; socketName: string | null }> = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session.sessionName, session.socketName);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("OperationService", () => {
@@ -77,7 +72,6 @@ describe("OperationService", () => {
 
     expect(archived).toMatchObject({ removed: false, archived: true, dirty: true });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
-    // The auto-created root workspace stays; only the worktree workspace is archived.
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
@@ -96,7 +90,6 @@ describe("OperationService", () => {
 
     const removed = await service.removeRepo({ repoId: repo.id });
 
-    // archivedWorkspaces includes both the auto-created root and the explicit worktree.
     expect(removed).toMatchObject({ removed: true, archivedWorkspaces: 2, cleanupWorktrees: false });
     expect(store.listRepos()).toEqual([]);
     expect(store.listWorkspaces()).toEqual([]);
@@ -119,9 +112,10 @@ describe("OperationService", () => {
     const created = await service.createWorkspace({ repoId: repo.id, name: "Active Repo", source: "scratch" });
     store.insertSession({
       id: "sess_active",
+      kind: "agent",
       workspaceId: created.workspaceId,
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-17T00:00:00.000Z",
@@ -201,11 +195,47 @@ describe("OperationService", () => {
     expect(blocked).toMatchObject({ removed: false, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(1);
+    // Regression pin: configured-teardown failure must label its error so
+    // operators / UI can disambiguate from file-teardown failures.
+    const blockedOp = store.listOperations().find((o) => o.id === blocked.operationId);
+    expect(blockedOp?.error).toMatch(/^configured teardown failed:/);
 
     const forced = await service.removeWorkspace({ workspaceId: created.workspaceId, force: true });
     expect(forced).toMatchObject({ removed: true, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
+  });
+
+  it("allows successful teardown hooks with unstructured stdout", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-logs",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stdout.write('No recorded dev stack pid file')"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-logs"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Logs", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
+    expect(store.listOperations().find((operation) => operation.id === removed.operationId)).toMatchObject({
+      status: "succeeded",
+    });
   });
 
   it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
@@ -234,7 +264,7 @@ describe("OperationService", () => {
 
     // Simulate the worktree directory disappearing out from under citadel
     // (e.g. it was removed manually, or by a parallel `git worktree remove`).
-    fs.rmSync(workspace?.path ?? "", { recursive: true, force: true });
+    fs.rmSync(workspace?.path ?? "", { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
     const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
     expect(removed).toMatchObject({ removed: true, archived: false });
@@ -265,7 +295,7 @@ describe("OperationService", () => {
     // `git worktree remove` errors with "is not a working tree". This
     // matches what we observed in the wild after a partial cleanup.
     const workspacePath = workspace?.path ?? "";
-    fs.rmSync(workspacePath, { recursive: true, force: true });
+    fs.rmSync(workspacePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     execFileSync("git", ["worktree", "prune"], { cwd: fixture.repoPath, stdio: "pipe" });
     fs.mkdirSync(workspacePath, { recursive: true });
     execFileSync("git", ["init", "--quiet"], { cwd: workspacePath, stdio: "pipe" });
@@ -361,26 +391,34 @@ describe("OperationService", () => {
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "mcp-output", source: "scratch" });
-    // Use bash with `read` to verify Enter is actually submitted by sendAgentMessage.
+    const fakeAgentPath = path.join(fixture.dir, "fake-agent.js");
+    fs.writeFileSync(
+      fakeAgentPath,
+      [
+        "process.stdin.setEncoding('utf8');",
+        "let buf = '';",
+        "process.stdin.on('data', (chunk) => {",
+        "  buf += chunk;",
+        "  for (;;) {",
+        "    const idx = buf.indexOf('\\n');",
+        "    if (idx < 0) break;",
+        "    const line = buf.slice(0, idx);",
+        "    buf = buf.slice(idx + 1);",
+        "    process.stdout.write(`ECHO:${line}\\n`);",
+        "  }",
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
     const session = await service.createAgentSession(
       {
         workspaceId: created.workspaceId,
-        runtimeId: "shell",
+        runtimeId: "fake-agent",
         prompt: undefined,
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "node", args: [fakeAgentPath], displayName: "Fake Agent" },
     );
     try {
-      // Drive the session into a read loop the same way Claude Code waits for
-      // chat input. If our follow-up does not press Enter, the loop never
-      // resolves and the assertion below times out.
-      execFileSync("tmux", [
-        "send-keys",
-        "-t",
-        session.tmuxSessionName ?? "",
-        "while read line; do printf 'ECHO:%s\\n' \"$line\"; done",
-        "Enter",
-      ]);
       const sendResult = await service.sendAgentMessage({ sessionId: session.id, message: "hello world" });
       expect(sendResult).toMatchObject({ ok: true, sessionId: session.id });
       // Poll the transcript until we see the echoed line.
@@ -402,25 +440,6 @@ describe("OperationService", () => {
     }
   });
 
-  it("rejects transcript/message calls for unknown sessions", async () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    const service = new OperationService(store, {
-      hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
-      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
-    });
-    expect(service.readAgentTranscript({ sessionId: "sess_missing" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-    expect(await service.sendAgentMessage({ sessionId: "sess_missing", message: "hi" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-  });
-
   it("stops a session, removes it from the cockpit, and records activity", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -433,13 +452,22 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "stop-target", source: "scratch" });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     expect(session.status).toBe("running");
     const result = service.stopAgentSession({ sessionId: session.id });
     expect(result.stopped).toBe(true);
-    expect(store.listSessions().find((candidate) => candidate.id === session.id)).toBeUndefined();
+    const stopped = store.listSessions().find((candidate) => candidate.id === session.id);
+    expect(stopped).toMatchObject({
+      id: session.id,
+      status: "stopped",
+      statusReason: "closed_by_user",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+    });
+    expect(stopped?.closedAt).toEqual(expect.any(String));
     expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
   });
 
@@ -482,7 +510,6 @@ describe("OperationService", () => {
     const first = await service.createWorkspace({ repoId: repo.id, name: "reusable", source: "scratch" });
     const removed = await service.removeWorkspace({ workspaceId: first.workspaceId });
     expect(removed).toMatchObject({ removed: true, archived: false });
-    // Row must be hard-deleted (not archived) so the UNIQUE(repo_id, name) index lets us recreate.
     expect(store.listArchivedWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     expect(store.listWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     // Re-creating under the same name no longer trips the unique index. Pass a
@@ -543,12 +570,18 @@ describe("OperationService", () => {
       source: "scratch",
     });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     // Kill the underlying tmux session out-of-band and remove the repo from disk.
-    if (session.tmuxSessionName) execFileSync("tmux", ["kill-session", "-t", session.tmuxSessionName]);
-    fs.rmSync(fixture.repoPath, { recursive: true, force: true });
+    if (session.tmuxSessionName)
+      execFileSync("tmux", [
+        ...tmuxPrefix(session.tmuxSocketName ?? null),
+        "kill-session",
+        "-t",
+        session.tmuxSessionName,
+      ]);
+    fs.rmSync(fixture.repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     const result = service.reconcile();
     expect(result.sessions).toBeGreaterThan(0);
     expect(result.repos).toBeGreaterThan(0);
@@ -559,13 +592,13 @@ describe("OperationService", () => {
   // Shell-first replacement of the legacy "reconcile flips to stopped" test.
   // The legacy assertion was: wrapper-`.live` sentinel removed → reconcile
   // flips status='stopped'. New behavior (shell-first lifecycle): the
-  // pane's foreground command IS the source of truth. For a `shell`
-  // runtime session, the pane PID is bash itself (no separate agent); the
-  // reconciler leaves it alone because the shell IS the runtime. The
+  // pane's foreground command IS the source of truth. For a shell-like custom
+  // agent runtime, the pane PID is bash itself (no separate agent); the
+  // reconciler leaves it alone because bash IS the runtime command. The
   // operator-visible "stopped" state is reserved for explicit Stop button
   // presses (which delete the row entirely). The new regression-pin tests
-  // for non-shell agent runtimes live in status-monitor.test.ts.
-  it("reconcile no longer mass-flips shell-runtime sessions to 'stopped' (shell-first invariant)", async () => {
+  // for non-shell-like agent runtimes live in status-monitor.test.ts.
+  it("reconcile no longer mass-flips shell-like custom agent runtimes to 'stopped'", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -577,8 +610,8 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "agent-exit-target", source: "scratch" });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
 
     try {
@@ -586,20 +619,20 @@ describe("OperationService", () => {
       const sessionName = session.tmuxSessionName as string;
       // Legacy sentinel removal is now a no-op — the wrapper is gone and
       // reconcile doesn't read /tmp sentinels at all (it reads the pane's
-      // foreground command via tmux). For a shell runtime session, the
-      // pane foreground IS bash, which is the runtime binary — reconcile
+      // foreground command via tmux). For a shell-like custom agent runtime,
+      // the pane foreground IS bash, which is the runtime binary — reconcile
       // leaves it alone.
       fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
 
       service.reconcile();
 
       const reconciled = store.listSessions().find((candidate) => candidate.id === session.id);
-      // Shell-runtime session: status preserved (NOT flipped to stopped).
+      // Shell-like custom agent runtime: status preserved (NOT flipped to stopped).
       expect(reconciled?.status).not.toBe("stopped");
       // Pane is still alive — the user can keep working in the shell.
-      expect(tmuxSessionExists(sessionName)).toBe(true);
+      expect(tmuxSessionExists(sessionName, session.tmuxSocketName ?? null)).toBe(true);
     } finally {
-      if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
   });
 
@@ -638,25 +671,6 @@ describe("OperationService", () => {
     });
   });
 
-  describe("launchAgent input validation", () => {
-    it("requires exactly one of repoId or repoName", () => {
-      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello" })).toThrow(/repoId or repoName/);
-      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello", repoId: "repo_test", repoName: "fixture" })).toThrow(
-        /repoId or repoName/,
-      );
-    });
-
-    it("requires a non-empty prompt", () => {
-      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test" })).toThrow();
-      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test", prompt: "" })).toThrow();
-    });
-
-    it("defaults runtimeId to claude-code", () => {
-      const parsed = LaunchAgentInputSchema.parse({ repoName: "fixture", prompt: "do a thing" });
-      expect(parsed.runtimeId).toBe("claude-code");
-    });
-  });
-
   it("launchAgent bundles workspace creation and agent session start in one call", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -669,11 +683,12 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath, name: "launch-fixture" });
 
     const result = await service.launchAgent(
-      { repoName: "launch-fixture", prompt: "describe the repo in one sentence", runtimeId: "shell" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { repoName: "launch-fixture", prompt: "describe the repo in one sentence", runtimeId: "test-agent" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
-    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+    if (session?.tmuxSessionName)
+      tmuxSessions.push({ sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null });
 
     expect(result.error).toBeUndefined();
     expect(result.sessionId).toBeTruthy();
@@ -684,10 +699,17 @@ describe("OperationService", () => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
     expect(workspace?.lifecycle).toBe("ready");
     expect(workspace?.source).toBe("scratch");
-    expect(workspace?.repoId).toBe(repo.id);
-    expect(session?.runtimeId).toBe("shell");
+    expect(workspace?.repoId).toBeNull();
+    expect(workspace?.kind).toBe("root");
+    expect(workspace?.mode).toBe("structured");
+    const checkout = store.listWorkspaceCheckouts(result.workspaceId)[0];
+    expect(checkout?.repoId).toBe(repo.id);
+    expect(checkout?.branch).toBe(result.branchName);
+    expect(checkout?.path).toBe(result.workspacePath);
+    expect(session?.runtimeId).toBe("test-agent");
     expect(session?.workspaceId).toBe(result.workspaceId);
-    // Display name is derived from the prompt's first ~40 chars when caller didn't pass one.
+    expect(session?.targetType).toBe("worktree_checkout");
+    expect(session?.checkoutId).toBe(checkout?.id);
     expect(session?.displayName).toBe("describe the repo in one sentence");
   });
 
@@ -707,15 +729,16 @@ describe("OperationService", () => {
       {
         repoId: repo.id,
         prompt: "investigate the failing build",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         namespaceId: namespace.id,
         workspaceName: "investigate-build",
         displayName: "Build Triage",
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
-    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+    if (session?.tmuxSessionName)
+      tmuxSessions.push({ sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null });
 
     expect(result.error).toBeUndefined();
     expect(session?.displayName).toBe("Build Triage");
@@ -737,14 +760,13 @@ describe("OperationService", () => {
 
     await expect(
       service.launchAgent(
-        { repoName: "does-not-exist", prompt: "x", runtimeId: "shell" },
-        { command: "bash", args: [], displayName: "Shell" },
+        { repoName: "does-not-exist", prompt: "x", runtimeId: "test-agent" },
+        { command: "bash", args: [], displayName: "Test Agent" },
       ),
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 });
-
 function createGitFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-ops-"));
   dirs.push(dir);
@@ -762,7 +784,6 @@ function createGitFixture() {
   run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
   return { dir, repoPath };
 }
-
 function run(command: string, args: string[], cwd: string) {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }

@@ -1,5 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import { OperationService } from "@citadel/operations";
+import { killTmuxSession } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeServer,
@@ -9,19 +11,16 @@ import {
   postJson,
 } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
+import { callDaemonMcpTool } from "./daemon-mcp-tool.js";
 
 const dirs: string[] = [];
 const tmuxSessions: string[] = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -31,7 +30,7 @@ describe("daemon launch_agent MCP tool", () => {
   it("creates a workspace on a brand-new branch and is idempotent on workspaceName", async () => {
     const fixture = createFixtureBase(dirs);
     const { repoPath } = createGitFixtureWithRemoteBase(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string; name: string } }>(`${baseUrl}/api/repos`, {
@@ -46,7 +45,7 @@ describe("daemon launch_agent MCP tool", () => {
         arguments: {
           repoId: repoResp.repo.id,
           prompt: "hello",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceName: "mcp-idem",
           branchName: "fb-brand-new-mcp",
         },
@@ -57,6 +56,24 @@ describe("daemon launch_agent MCP tool", () => {
       expect(first.sessionId).toBeTruthy();
       expect(first.branchName).toBe("fb-brand-new-mcp");
       expect(first.resumed).toBeUndefined();
+      expect(fixture.store.listWorkspaces().find((workspace) => workspace.id === first.workspaceId)).toMatchObject({
+        repoId: null,
+        kind: "root",
+        mode: "structured",
+        branch: "home",
+      });
+      expect(fixture.store.listWorkspaceCheckouts(first.workspaceId)).toMatchObject([
+        {
+          repoId: repoResp.repo.id,
+          branch: "fb-brand-new-mcp",
+        },
+      ]);
+      expect(
+        fixture.store.listSessions(first.workspaceId).find((session) => session.id === first.sessionId),
+      ).toMatchObject({
+        targetType: "worktree_checkout",
+        checkoutId: fixture.store.listWorkspaceCheckouts(first.workspaceId)[0]?.id,
+      });
 
       const secondResp = await postJson<{
         result: { workspaceId: string; sessionId: string; resumed?: boolean };
@@ -65,7 +82,7 @@ describe("daemon launch_agent MCP tool", () => {
         arguments: {
           repoId: repoResp.repo.id,
           prompt: "again",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceName: "mcp-idem",
           branchName: "fb-brand-new-mcp",
         },
@@ -77,5 +94,54 @@ describe("daemon launch_agent MCP tool", () => {
     } finally {
       await closeServer(server);
     }
+  }, 20_000);
+});
+
+describe("daemon structured launch MCP tool dispatch", () => {
+  it("derives actor from daemon context and emits successful structured launches", async () => {
+    const fixture = createFixtureBase(dirs);
+    const operations = new OperationService(fixture.store, fixture.config);
+    const events: Array<[string, unknown]> = [];
+    const deps = {
+      config: fixture.config,
+      store: fixture.store,
+      operations,
+      scheduledAgents: {} as never,
+      scheduledAgentService: {} as never,
+      providerCache: new Map(),
+      emit: (type: string, payload: unknown) => events.push([type, payload]),
+    };
+    const workspace = await operations.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(fixture.config.dataDir, "paused-feature"),
+      name: "Paused Feature",
+      source: "scratch",
+    });
+    operations.pauseWorkspaceManager({ workspaceId: workspace.workspaceId });
+
+    await expect(
+      callDaemonMcpTool(
+        deps,
+        { name: "launch_pm_agent", arguments: { workspaceId: workspace.workspaceId, actor: "human" } },
+        { actor: "mcp" },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "automation_paused" });
+
+    const launched = (await callDaemonMcpTool(
+      deps,
+      { name: "launch_pm_agent", arguments: { workspaceId: workspace.workspaceId } },
+      { actor: "human" },
+    )) as { ok: true; workspaceId: string; session: { id: string; role: string; targetType: string } };
+    tmuxSessions.push(`citadel_${launched.session.id}`);
+    expect(launched).toMatchObject({
+      ok: true,
+      workspaceId: workspace.workspaceId,
+      session: { role: "pm", targetType: "workspace_home" },
+    });
+    expect(events).toContainEqual([
+      "agent.updated",
+      { workspaceId: workspace.workspaceId, sessionId: launched.session.id },
+    ]);
+    operations.stopWorkspaceSession({ sessionId: launched.session.id });
   }, 20_000);
 });

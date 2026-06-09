@@ -10,13 +10,13 @@
 [~] 2. Settings is secondary to the cockpit.
 [ ] 3. The UI is calm, dense, premium, and operational.
 [~] 4. shadcn-style components are used where they improve consistency and speed. First wave of primitives shipped under `apps/web/src/components/ui/` (Button, Badge, Card, Panel, Input/Textarea/Select/Label/FormField/HelpText, Tabs, Dialog, Tooltip, Chip, IconButton, EmptyState, Skeleton, Toast); see `apps/web/src/design-system/README.md`. Remaining surface migrations deferred to follow-up PRs.
-[ ] 5. The UI has theme support.
+[~] 5. The UI has theme support. The theme selector is a single cycling button with three states (Light / Dark / System); System resolves via `prefers-color-scheme`. Toggling the cockpit theme re-themes every open terminal in place through the xterm renderer — no full reload, no confirm prompt, and no terminal-session restart. Rapid toggles coalesce through React state, and OS-driven theme flips on the System setting follow the same code path.
 [ ] 6. Workspace rows are compact and scannable.
 [ ] 7. Status language is concrete and operator-facing.
 [ ] 8. Primary actions, secondary actions, links, statuses, and metadata have distinct visual treatment.
 [ ] 9. Desktop key views have screenshot review before release.
 [ ] 10. Mobile key views have screenshot review before release.
-[~] 11. Mobile supports monitoring and light actions. The mobile shell stays fixed at the viewport (`100dvh`); the mobile switcher chooses Navigator/Stage/Inspector; the Stage column owns its own scroll and the ttyd iframe receives a definite height so it never collapses or page-scrolls.
+[~] 11. Mobile supports monitoring and light actions. The mobile shell stays fixed at the viewport (`100dvh`); the mobile switcher chooses Navigator/Stage/Inspector; the Stage column owns its own scroll and the xterm host receives a definite height so it never collapses or page-scrolls.
 [ ] 12. The default theme is a dark-blue v1-inspired palette: deep navy/slate background, lighter slate panels, cyan/sky accent for selection and primary actions.
 [ ] 13. The three-column cockpit shell has independently resizable side columns with drag handles between columns.
 [ ] 14. The three-column cockpit shell has independently collapsible side columns; the collapse control sits at the top-right of the left navigator and the top-left of the right inspector.
@@ -36,17 +36,24 @@
 [ ] 9. The navigator separates Dashboard/History from the workspaces list with a subtle divider, and exposes group-by/add-repo/create-workspace icon controls next to the *Workspaces* header.
 [ ] 10. The Dashboard route surfaces the kanban as its primary content, framed by a compact header that contains only a back-to-cockpit link. No oversized page title is rendered.
 [ ] 11. The History route also exposes a back-to-cockpit link in its compact header, matching the Dashboard treatment.
-[ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts.
+[ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts. Global agent settings such as the base system prompt are visually separate from runtime cards and role editors without nesting cards.
+[ ] 13. Workspace > Home/checkouts navigation preserves stable row heights and does not shift while live session/gate counts update.
+[~] 14. Workspace-level history remains usable for many manager-created sessions without mounting terminal renderers for closed tabs.
 
 ## Performance
 
-[ ] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories.
-[ ] 2. Workspace switching remains responsive with long terminal buffers.
+[~] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories and remains usable at large operator loads (target: 50 workspaces with 3-5 agent sessions each, plus structured workspaces with multiple checkouts) without pre-spawning one terminal renderer process per session.
+[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets. Recently visited panes remain mounted and attached across ordinary tab switches, with the LRU cap bounding active browser renderer count. Legacy sessions may use disposable node-pty tmux attach viewers, while PTY-daemon sessions bridge directly to a long-running PTY owner process instead of forcing iframe or renderer-process startup on every cache miss. Terminal renderer stability includes opaque xterm surfaces and coalesced/de-duped active-pane resize controls so repaint or layout churn does not make the terminal unreadable.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
-[ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
-[ ] 6. Normal navigation transfers only the terminal data needed for the active view.
-[ ] 7. Main happy paths have performance smoke coverage.
+[ ] 5. Terminal scrollback is bounded or virtualized. Legacy tmux sessions enforce a global `history-limit` (default 20000 lines per pane). PTY-daemon sessions enforce bounded raw replay plus bounded rendered screen/scrollback storage so a forgotten session cannot grow terminal memory without bound.
+[~] 6. Normal navigation transfers only the terminal data needed for mounted views: legacy tmux sessions send tmux's current visible state on attach plus live PTY output; PTY-daemon sessions send a bounded replay/snapshot plus live PTY output while the pane is mounted.
+[ ] 7. Main happy paths have performance smoke coverage. Terminal performance smoke compares direct `node-pty`, the legacy tmux attach bridge, the PTY-daemon WebSocket path, and browser typing latency under idle and high-output conditions.
+[ ] 7a. PTY-daemon terminal typing latency materially improves over the legacy tmux attach bridge before the backend becomes default. The local benchmark gate is p95 key echo latency at least 40% lower than tmux attach, no worse than 2x direct `node-pty`, browser typing latency under 50 ms p95 when idle, and under 100 ms p95 during high output on the benchmark host.
+[~] 8. Navigator/state payloads for structured workspaces are normalized enough that manager history, plan versions, and closed sessions do not force repeated full-terminal or full-artifact payload downloads.
+[ ] 9. Manager heartbeat/tick work is event-first with a low-frequency backstop and must not poll provider-heavy gates for inactive or paused workspaces without need.
+[ ] 10. Structured workspace state exposed to the web is normalized enough that manager actions/events, parsed delivery units, review artifacts, gate snapshots, durable facts, notifications, and closed-session history can render without downloading prompt bodies, transcripts, raw provider dumps, or full terminal buffers.
+[ ] 11. Human Review diff rendering uses metadata-first loading, lazy per-file content, explicit truncation states, and screenshot/performance smoke coverage so large diffs do not block cockpit navigation or render blank review panes.
 
 ## Release Quality
 
@@ -56,12 +63,16 @@
 [ ] 4. E2E covers add repository and remove repository flows.
 [ ] 5. E2E covers create workspace and remove workspace flows.
 [ ] 6. E2E covers workspace cockpit readiness.
-[ ] 7. E2E covers terminal smoke.
+[ ] 7. E2E covers terminal smoke, including both WebSocket transport behavior and cockpit renderer stability for the active xterm surface.
 [ ] 8. E2E covers provider degraded state.
 [ ] 9. E2E covers hook app/action output.
 [ ] 10. E2E covers desktop and mobile layout.
 [ ] 11. Release checks include format, typecheck, lint, test, e2e, production build, and performance smoke.
 [ ] 12. Coverage targets are meaningful and behavior-oriented.
+[ ] 13. E2E covers structured workspace shell creation, Home/checkouts navigation, Agents config edit/reset, specialized launch gating, manager pause, local readiness notification, and closed-session history.
+[ ] 14. E2E uses deterministic fake runtime/provider/review fixtures so structured manager flows can drive PR, issue, transition, review, notification, and manager tick outcomes without live Jira/GitHub dependencies.
+[ ] 15. Unit tests cover manager decision reducers, action idempotency/lease fencing, plan parsing, provider fact identity/degradation, PR/check fact identity/degradation, review artifact invalidation, stack/restack safety, authorization spoof rejection, launch-option derivation, Home/checkout components, notifications, Agents config validation, and target-aware session history/focus.
+[ ] 16. E2E covers Human Review desktop and mobile layout, including nonblank diff rendering, create-PR entry, internal comments, resolved/reopen lifecycle, and viewed file state.
 
 ## Test Isolation (source of truth)
 
@@ -69,7 +80,7 @@
 [~] 2. Vitest tests must allocate temporary directories via `fs.mkdtempSync(path.join(os.tmpdir(), ...))` instead of relying on the default `CITADEL_DATA_DIR`.
 [~] 3. Playwright tests must run against a daemon started with an isolated `CITADEL_DATA_DIR` and ports that cannot collide with the operator's dev daemon (4010) or web (5175).
 [~] 4. Citadel provides `pnpm test:isolated` and `pnpm e2e:isolated` wrappers (see `scripts/dev/test-isolated.ts`). They allocate a fresh `CITADEL_DATA_DIR` under `os.tmpdir()`, randomise Playwright ports out of the dev range, and clean up after the run unless `CITADEL_TEST_KEEP=1`.
-[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, and `ttyd` versions for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
+[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, tmux, and native PTY dependencies for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
 
 ---
 

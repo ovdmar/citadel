@@ -11,7 +11,7 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -43,7 +43,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -105,7 +105,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -123,7 +123,7 @@ describe("agent message MCP + REST routes", () => {
         method: "tools/call",
         params: {
           name: "launch_agent",
-          arguments: { repoName: "fixture-repo", prompt: "do the thing", runtimeId: "shell" },
+          arguments: { repoName: "fixture-repo", prompt: "do the thing", runtimeId: "test-agent" },
         },
       });
       expect(launch.result.structuredContent).toMatchObject({
@@ -135,7 +135,7 @@ describe("agent message MCP + REST routes", () => {
       expect(launches[0]?.input).toMatchObject({
         repoName: "fixture-repo",
         prompt: "do the thing",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
       });
       expect(launches[0]?.runtime.command).toBe("bash");
     } finally {
@@ -150,7 +150,7 @@ describe("agent message MCP + REST routes", () => {
         throw new Error("should not be called");
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/mcp/rpc`, {
@@ -160,7 +160,7 @@ describe("agent message MCP + REST routes", () => {
           jsonrpc: "2.0",
           id: "bad",
           method: "tools/call",
-          params: { name: "launch_agent", arguments: { prompt: "x", runtimeId: "shell" } },
+          params: { name: "launch_agent", arguments: { prompt: "x", runtimeId: "test-agent" } },
         }),
       });
       const body = (await response.json()) as { error?: { message: string }; result?: { isError?: boolean } };
@@ -198,7 +198,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -266,7 +266,7 @@ describe("agent message MCP + REST routes", () => {
         return history;
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -380,7 +380,7 @@ describe("agent message MCP + REST routes", () => {
       ].join("\n"),
     );
 
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const originalHome = process.env.HOME;
     process.env.HOME = home;
@@ -440,7 +440,7 @@ describe("agent message MCP + REST routes", () => {
             };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const output = await getJson<{ ok: boolean; text: string }>(`${baseUrl}/api/agent-sessions/sess_x/output`);
@@ -476,12 +476,12 @@ function createFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function listen(server: http.Server) {

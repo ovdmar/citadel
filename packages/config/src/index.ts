@@ -1,101 +1,50 @@
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { HookEventSchema, JiraAutoTransitionSchema } from "@citadel/contracts";
 import { z } from "zod";
+import {
+  AgentRuntimeConfigSchema,
+  BUILTIN_AGENT_RUNTIMES,
+  ensureCodexGoalsFeatureArgs,
+} from "./agent-runtime-config.js";
+import type { AgentRuntimeConfig } from "./agent-runtime-config.js";
+import { ProviderRefreshConfigSchema } from "./provider-refresh.js";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
 export type { DevState } from "./dev-state.js";
+export {
+  AgentRuntimeConfigSchema,
+  CODEX_GOALS_FEATURE_ARGS,
+  ensureCodexGoalsFeatureArgs,
+} from "./agent-runtime-config.js";
+export type { AgentRuntimeConfig } from "./agent-runtime-config.js";
+export { DEFAULT_PROVIDER_REFRESH, ProviderRefreshConfigSchema } from "./provider-refresh.js";
 
-// Built-in defaults for the runtimes Citadel ships with. Held as a constant so
-// we can both seed the schema's default (fresh install) AND backfill missing
-// fields onto user-saved configs (existing installs whose `citadel.config.json`
-// was written before newer fields like `resumeArg`/`sessionIdArg` existed —
-// without backfill those installs silently lose resume support).
-type BuiltinRuntime = {
-  id: string;
-  displayName: string;
-  command: string;
-  args: string[];
-  promptArg?: string;
-  resumeArg?: string;
-  sessionIdArg?: string;
-  supportsResume?: boolean;
-  supportsPrompt?: boolean;
-  supportsModelSelection?: boolean;
-};
+// Re-export HookEventSchema so existing consumers importing it from
+// @citadel/config keep working. The canonical home is @citadel/contracts —
+// see `packages/contracts/src/hooks.ts` for the rationale.
+export { HookEventSchema } from "@citadel/contracts";
+export type { HookEvent } from "@citadel/contracts";
 
-const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
-  {
-    id: "claude-code",
-    displayName: "Claude Code",
-    command: "claude",
-    args: [],
-    // No promptArg: Claude Code's `-p` is non-interactive print mode and
-    // exits after responding, which is not what Citadel agent sessions
-    // want. Interactive prompts are injected into the tmux pane after the
-    // runtime is ready (see operations.createAgentSession).
-    resumeArg: "--resume",
-    sessionIdArg: "--session-id",
-    supportsResume: true,
-    supportsPrompt: true,
-    supportsModelSelection: true,
-  },
-  {
-    id: "codex",
-    displayName: "Codex",
-    command: "codex",
-    // `--yolo` (alias for `--dangerously-bypass-approvals-and-sandbox`) is a
-    // global flag — codex accepts it before the `resume` subcommand, so the
-    // same default works for both launch (`codex --yolo`) and resume
-    // (`codex --yolo resume <uuid>`). Operators can clear it via Settings →
-    // Runtimes if they want approval prompts back.
-    args: ["--yolo"],
-    // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
-    // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
-    // here yields the right argv. No `sessionIdArg`: codex auto-generates the
-    // UUID at spawn and we recover it via discoverCodexSessionId (with a
-    // lazy backfill at restore-collection time, see restore-routes.ts).
-    resumeArg: "resume",
-    supportsResume: true,
-    supportsPrompt: true,
-  },
-  {
-    id: "cursor-agent",
-    displayName: "Cursor Agent",
-    command: "cursor-agent",
-    args: [],
-    supportsPrompt: true,
-  },
-  { id: "pi", displayName: "Pi", command: "pi", args: [] },
-  { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
-];
+const DEFAULT_TERMINAL_PROFILE = {
+  displayName: "Terminal",
+  command: "bash",
+  args: ["-l"],
+} as const;
 
-export const RuntimeConfigSchema = z.object({
-  id: z.string().min(1),
-  displayName: z.string().min(1),
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  promptArg: z.string().optional(),
-  resumeArg: z.string().optional(),
-  // Flag (e.g. "--session-id") this runtime accepts to pin a caller-chosen
-  // UUID on a fresh session. Citadel generates the UUID up front, persists
-  // it, and uses `resumeArg` to continue the same conversation on respawn.
-  // Set only for runtimes that support it (claude-code today); others rely
-  // on post-spawn discovery from their transcript directory.
-  sessionIdArg: z.string().optional(),
-  supportsResume: z.boolean().optional(),
-  supportsPrompt: z.boolean().optional(),
-  supportsModelSelection: z.boolean().optional(),
-  // When true, the cockpit top bar renders a low-contrast usage pill next to
-  // the Settings icon for this runtime. Health-gated: a runtime that isn't
-  // healthy is silently dropped from the bar regardless of this flag.
-  showUsageInTopBar: z.boolean().optional(),
-  // Identifies which usage category drives the top-bar pill — by default the
-  // first category from the fetcher. Key shape is `<section>/<label>` when the
-  // category sits inside a section, else just `<label>`. Stale keys (provider
-  // renamed a row) silently fall back to the first available category.
-  topBarCategoryKey: z.string().min(1).max(200).optional(),
+export const TerminalProfileConfigSchema = z.object({
+  displayName: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.displayName),
+  command: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.command),
+  args: z.array(z.string()).default([...DEFAULT_TERMINAL_PROFILE.args]),
 });
+
+export const AgentSessionsConfigSchema = z
+  .object({
+    baseSystemPrompt: z.string().default(""),
+  })
+  .default({ baseSystemPrompt: "" });
 
 export const UsageProviderConfigSchema = z.object({
   id: z.string().min(1),
@@ -106,22 +55,50 @@ export const UsageProviderConfigSchema = z.object({
     .string()
     .optional()
     .refine((value) => value === undefined || path.isAbsolute(value), "Usage provider cwd must be an absolute path"),
+  // Override the daemon-wide `providerRefresh.intervals.usageMs` cadence for
+  // this specific usage provider. Only the provider knob is honored — there is
+  // no per-runtime knob because RuntimeConfig is consumed in too many places.
+  refreshIntervalMs: z.number().int().min(30_000).optional(),
 });
 
-export const HookEventSchema = z.enum([
-  "workspace.setup",
-  "workspace.teardown",
-  "workspace.apps",
-  "workspace.action",
-  "workspace.created",
-  "workspace.archived",
-  "workspace.removed",
-  "agent.started",
-]);
+export const DEFAULT_FIX_CI_AUTOMATION = {
+  enabled: true,
+  runtimeId: "claude-code",
+  fallbackRuntimeId: "codex",
+  idleThresholdMs: 5 * 60 * 1000,
+  debounceMs: 30 * 60 * 1000,
+  intervalMs: 60 * 1000,
+} as const;
 
+export const FixCiAutomationConfigSchema = z.object({
+  enabled: z.boolean().default(DEFAULT_FIX_CI_AUTOMATION.enabled),
+  runtimeId: z.string().min(1).default(DEFAULT_FIX_CI_AUTOMATION.runtimeId),
+  fallbackRuntimeId: z.string().min(1).nullable().default(DEFAULT_FIX_CI_AUTOMATION.fallbackRuntimeId),
+  idleThresholdMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.idleThresholdMs),
+  debounceMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.debounceMs),
+  intervalMs: z.number().int().min(1000).default(DEFAULT_FIX_CI_AUTOMATION.intervalMs),
+});
+
+export const AutomationConfigSchema = z
+  .object({
+    fixCi: FixCiAutomationConfigSchema.default(DEFAULT_FIX_CI_AUTOMATION),
+  })
+  .default({ fixCi: DEFAULT_FIX_CI_AUTOMATION });
+
+// HookConfigSchema describes a hook configured in citadel's global JSON
+// config. File-based hooks (`.citadel/hooks/<event>/<name>.{sh,agent}`) own
+// the `file:` id prefix — config-defined ids cannot collide with discovered
+// hook ids. Blocking defaults to true for events whose failure must surface
+// rather than be swallowed: workspace setup/teardown (today) plus pr.merge
+// (a failing `gh pr merge` must not silently let the operation proceed).
 export const HookConfigSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .refine((id) => !id.startsWith("file:"), {
+        message: "Hook id 'file:' prefix is reserved for file-based hooks",
+      }),
     kind: z.literal("command").default("command"),
     event: HookEventSchema,
     command: z.string().min(1),
@@ -134,7 +111,7 @@ export const HookConfigSchema = z
   })
   .transform((hook) => ({
     ...hook,
-    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown"].includes(hook.event),
+    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown", "pr.merge"].includes(hook.event),
   }));
 
 export const CitadelConfigSchema = z
@@ -144,6 +121,22 @@ export const CitadelConfigSchema = z
     databasePath: z.string().min(1),
     bindHost: z.string().default("127.0.0.1"),
     port: z.number().int().min(1).max(65535).default(4010),
+    // Optional inline TLS. Both paths must be absolute; both files must exist
+    // and be non-zero bytes; the cert must not be expired. Runtime validation
+    // (file existence, expiry) lives in validateTlsAssets() — the zod refines
+    // stay pure (path-shape only) so the schema has no filesystem side effects.
+    tls: z
+      .object({
+        certPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS certPath must be absolute"),
+        keyPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS keyPath must be absolute"),
+      })
+      .optional(),
     mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
     providers: z
       .object({
@@ -158,15 +151,30 @@ export const CitadelConfigSchema = z
             enabled: z.boolean().default(true),
             command: z.string().min(1).default("jtk"),
             projectKey: z.string().min(1).optional(),
+            // Lifecycle-event-driven auto-transitions. `transition` names the
+            // target status (e.g., "In Progress"); the runtime resolves it
+            // to an available transition by matching `toStatus`
+            // case-insensitively. Shape canonicalized in @citadel/contracts
+            // (see JiraAutoTransitionSchema) — config defers to keep a
+            // single source of truth.
+            autoTransitions: z.array(JiraAutoTransitionSchema).default([]),
           })
-          .default({ enabled: true, command: "jtk" }),
+          .default({ enabled: true, command: "jtk", autoTransitions: [] }),
       })
       .default({
         github: { enabled: true, command: "gh" },
         jira: { enabled: true, command: "jtk" },
       }),
-    runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    agentRuntimes: z
+      .array(AgentRuntimeConfigSchema)
+      .default(() => BUILTIN_AGENT_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    agentSessions: AgentSessionsConfigSchema,
+    terminal: TerminalProfileConfigSchema.default({
+      ...DEFAULT_TERMINAL_PROFILE,
+      args: [...DEFAULT_TERMINAL_PROFILE.args],
+    }),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
+    automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),
     repoDefaults: z
       .object({
@@ -182,6 +190,7 @@ export const CitadelConfigSchema = z
         allowDestructiveWorkspaceCleanup: z.boolean().default(false),
       })
       .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
+    providerRefresh: ProviderRefreshConfigSchema,
     scratchpad: z
       .object({
         path: z
@@ -234,9 +243,13 @@ export const CitadelConfigSchema = z
   });
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
-export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
+export type TerminalProfileConfig = z.infer<typeof TerminalProfileConfigSchema>;
+export type AgentSessionsConfig = z.infer<typeof AgentSessionsConfigSchema>;
 export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
+export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
+export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
 export type HookConfig = z.infer<typeof HookConfigSchema>;
+export type ProviderRefreshConfig = z.infer<typeof ProviderRefreshConfigSchema>;
 
 export function defaultDataDir() {
   return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");
@@ -313,7 +326,7 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
   };
   if (!fs.existsSync(configPath)) {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const parsed = CitadelConfigSchema.parse(defaults);
+    const parsed = backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(defaults));
     fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
     return parsed;
   }
@@ -342,26 +355,117 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
         : undefined;
     const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
     if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
-    return backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged));
+    return parseAndMaybeMigrateConfig(merged, configPath);
   }
-  return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) }));
+  return parseAndMaybeMigrateConfig({ ...defaults, ...(raw ?? {}) }, configPath);
 }
 
-// Heal user-saved runtime entries whose on-disk shape predates newer schema
+function parseAndMaybeMigrateConfig(raw: Record<string, unknown>, configPath: string): CitadelConfig {
+  const migration = migrateLegacyRuntimes(raw);
+  const parsed = normalizeRuntimeDefaults(backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(migration.raw)));
+  if (migration.didMigrate) {
+    warnLegacyRuntimeMigration(configPath, migration);
+    writeCanonicalConfigAfterMigration(parsed, configPath);
+  }
+  return parsed;
+}
+
+type LegacyRuntimeMigration = {
+  raw: Record<string, unknown>;
+  didMigrate: boolean;
+  droppedShellLikeNames: string[];
+  terminalSourceName: string | null;
+};
+
+function migrateLegacyRuntimes(raw: Record<string, unknown>): LegacyRuntimeMigration {
+  if ("agentRuntimes" in raw || !Array.isArray(raw.runtimes)) {
+    return { raw, didMigrate: false, droppedShellLikeNames: [], terminalSourceName: null };
+  }
+
+  const legacyRuntimes: AgentRuntimeConfig[] = [];
+  for (const entry of raw.runtimes) {
+    const parsed = AgentRuntimeConfigSchema.safeParse(entry);
+    if (parsed.success) legacyRuntimes.push(parsed.data);
+  }
+  const shellLike = legacyRuntimes.filter(isShellLikeRuntime);
+  const terminalSource = shellLike.find((runtime) => runtime.id === "shell") ?? shellLike[0] ?? null;
+  const shellLikeIds = new Set(shellLike.map((runtime) => runtime.id));
+  const agentRuntimes = legacyRuntimes.filter((runtime) => !shellLikeIds.has(runtime.id));
+  const terminal = terminalSource
+    ? TerminalProfileConfigSchema.parse({
+        displayName: terminalSource.displayName || DEFAULT_TERMINAL_PROFILE.displayName,
+        command: terminalSource.command,
+        args: terminalSource.args,
+      })
+    : TerminalProfileConfigSchema.parse(DEFAULT_TERMINAL_PROFILE);
+  const { runtimes: _legacyRuntimes, ...withoutLegacy } = raw;
+  return {
+    raw: {
+      ...withoutLegacy,
+      agentRuntimes,
+      terminal,
+    },
+    didMigrate: true,
+    droppedShellLikeNames: shellLike
+      .filter((runtime) => runtime.id !== terminalSource?.id)
+      .map((runtime) => `${runtime.displayName} (${runtime.id})`),
+    terminalSourceName: terminalSource ? `${terminalSource.displayName} (${terminalSource.id})` : null,
+  };
+}
+
+function isShellLikeRuntime(runtime: AgentRuntimeConfig): boolean {
+  if (runtime.id === "shell") return true;
+  const command = path.basename(runtime.command);
+  return new Set(["bash", "sh", "zsh", "fish", "nu", "pwsh", "powershell"]).has(command);
+}
+
+function warnLegacyRuntimeMigration(configPath: string, migration: LegacyRuntimeMigration) {
+  const terminalDetail = migration.terminalSourceName
+    ? `terminal profile migrated from ${migration.terminalSourceName}`
+    : "terminal profile set to the default bash login shell";
+  const dropped = migration.droppedShellLikeNames.length
+    ? ` Dropped legacy shell-like entries from agentRuntimes: ${migration.droppedShellLikeNames.join(", ")}.`
+    : "";
+  console.warn(
+    `[citadel-config] Migrated legacy runtimes in ${configPath} to agentRuntimes + terminal; ${terminalDetail}.${dropped}`,
+  );
+}
+
+function writeCanonicalConfigAfterMigration(config: CitadelConfig, configPath: string) {
+  const backupPath = `${configPath}.legacy-runtimes.bak`;
+  try {
+    if (!fs.existsSync(backupPath) && fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, backupPath);
+      fs.chmodSync(backupPath, 0o600);
+    }
+    const tmpPath = `${configPath}.tmp`;
+    fs.writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
+    fs.renameSync(tmpPath, configPath);
+  } catch (error) {
+    console.warn(
+      `[citadel-config] Could not write canonical config to ${configPath}; using migrated config in memory only: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
+
+// Heal user-saved agent runtime entries whose on-disk shape predates newer schema
 // fields (resumeArg, sessionIdArg, supportsResume, etc.). User overrides win;
 // only fields the user didn't set get filled in from the built-in by id.
-// Unknown ids are left untouched — those are custom runtimes the user added.
-function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
-  const byId = new Map(BUILTIN_RUNTIMES.map((r) => [r.id, r] as const));
+// Unknown ids are left untouched — those are custom agent runtimes the user added.
+function backfillBuiltinAgentRuntimes(config: CitadelConfig): CitadelConfig {
+  const byId = new Map(BUILTIN_AGENT_RUNTIMES.map((r) => [r.id, r] as const));
   let mutated = false;
-  const runtimes = config.runtimes.map((runtime) => {
+  const agentRuntimes = config.agentRuntimes.map((runtime) => {
     const builtin = byId.get(runtime.id);
     if (!builtin) return runtime;
     const merged: Record<string, unknown> = { ...builtin };
     for (const [key, value] of Object.entries(runtime)) {
       if (value !== undefined) merged[key] = value;
     }
-    const next = RuntimeConfigSchema.parse(merged);
+    const next = AgentRuntimeConfigSchema.parse(merged);
     if (
       Object.keys(next).some((k) => (next as Record<string, unknown>)[k] !== (runtime as Record<string, unknown>)[k])
     ) {
@@ -369,21 +473,40 @@ function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
     }
     return next;
   });
-  return mutated ? { ...config, runtimes } : config;
+  return mutated ? { ...config, agentRuntimes } : config;
+}
+
+function normalizeRuntimeDefaults(config: CitadelConfig): CitadelConfig {
+  let mutated = false;
+  const agentRuntimes = config.agentRuntimes.map((runtime) => {
+    const args = ensureCodexGoalsFeatureArgs(runtime.id, runtime.args);
+    if (sameStringArray(args, runtime.args)) return runtime;
+    mutated = true;
+    return { ...runtime, args };
+  });
+  return mutated ? { ...config, agentRuntimes } : config;
+}
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {
-  const parsed = CitadelConfigSchema.parse(config);
+  const parsed = normalizeRuntimeDefaults(backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(config)));
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
   return parsed;
 }
 
 export function mergeConfigPatch(current: CitadelConfig, patch: unknown) {
-  return CitadelConfigSchema.parse({
-    ...current,
-    ...(typeof patch === "object" && patch !== null ? patch : {}),
-  });
+  return normalizeRuntimeDefaults(
+    backfillBuiltinAgentRuntimes(
+      CitadelConfigSchema.parse({
+        ...current,
+        ...(typeof patch === "object" && patch !== null ? patch : {}),
+      }),
+    ),
+  );
 }
 
 function validateHookReferences(
@@ -411,4 +534,48 @@ function validateHookReferences(
       });
     }
   });
+}
+
+// Runtime TLS-asset validator. Run by the daemon at boot AFTER zod-parsing.
+// Refuses if cert/key files don't exist, are empty, or the cert is expired.
+// Returns a "validation result" rather than throwing so callers can decide
+// whether to fail-fast (daemon boot) or surface as a doctor check.
+export type TlsAssetValidationResult = { ok: true; notBefore: Date; notAfter: Date } | { ok: false; reason: string };
+
+export function validateTlsAssets(config: Pick<CitadelConfig, "tls">): TlsAssetValidationResult | null {
+  if (!config.tls) return null;
+  const { certPath, keyPath } = config.tls;
+  let certStat: fs.Stats;
+  try {
+    certStat = fs.statSync(certPath);
+  } catch {
+    return { ok: false, reason: `TLS cert not found at ${certPath}` };
+  }
+  if (!certStat.isFile() || certStat.size === 0) {
+    return { ok: false, reason: `TLS cert at ${certPath} is empty or not a regular file` };
+  }
+  try {
+    const keyStat = fs.statSync(keyPath);
+    if (!keyStat.isFile() || keyStat.size === 0) {
+      return { ok: false, reason: `TLS key at ${keyPath} is empty or not a regular file` };
+    }
+  } catch {
+    return { ok: false, reason: `TLS key not found at ${keyPath}` };
+  }
+  try {
+    const pem = fs.readFileSync(certPath);
+    const cert = new X509Certificate(pem);
+    const now = Date.now();
+    const notAfter = new Date(cert.validTo);
+    const notBefore = new Date(cert.validFrom);
+    if (Number.isNaN(notAfter.getTime())) {
+      return { ok: false, reason: `TLS cert at ${certPath}: unparseable validTo` };
+    }
+    if (notAfter.getTime() < now) {
+      return { ok: false, reason: `TLS cert at ${certPath} expired on ${notAfter.toISOString()}` };
+    }
+    return { ok: true, notBefore, notAfter };
+  } catch (err) {
+    return { ok: false, reason: `TLS cert at ${certPath} could not be parsed: ${(err as Error).message}` };
+  }
 }

@@ -2,6 +2,7 @@ import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  AlarmClock,
   ArrowLeft,
   Bug,
   Cable,
@@ -10,32 +11,35 @@ import {
   FileText,
   FolderGit2,
   History,
-  Moon,
   Server,
   Sparkles,
-  Sun,
+  Stethoscope,
   Workflow,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { AutomationsPanel } from "../settings-automations.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { DebugPanel } from "../settings-debug.js";
+import { DiagnosticsPanel } from "../settings-diagnostics.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
-import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
+import { ThemeControls } from "../theme-controls.js";
 
 type SectionId =
   | "overview"
   | "providers"
   | "agents"
+  | "automations"
   | "repositories"
   | "restore"
   | "actions"
   | "mcp"
+  | "diagnostics"
   | "notes"
   | "debug";
 
@@ -61,6 +65,12 @@ const SECTIONS: Section[] = [
     icon: Server,
   },
   {
+    id: "automations",
+    label: "Automations",
+    description: "Rules that start agents on their own.",
+    icon: AlarmClock,
+  },
+  {
     id: "repositories",
     label: "Repositories",
     description: "Registered repos and tracking.",
@@ -79,6 +89,12 @@ const SECTIONS: Section[] = [
     icon: Sparkles,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
+  {
+    id: "diagnostics",
+    label: "Diagnostics",
+    description: "Is everything configured? Runs the same checks as `make doctor`.",
+    icon: Stethoscope,
+  },
   {
     id: "notes",
     label: "Notes",
@@ -126,7 +142,7 @@ export function SettingsView() {
         <div />
 
         <div className="set-top-right">
-          <ThemeToggle />
+          <ThemeControls />
         </div>
       </header>
 
@@ -166,7 +182,7 @@ export function SettingsView() {
           {section === "overview" ? (
             <Overview
               providerHealth={data?.providerHealth ?? []}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
               repos={data?.repos ?? []}
               mcpEnabled={Boolean(data?.mcp.enabled)}
               onNavigate={(id) => {
@@ -188,7 +204,20 @@ export function SettingsView() {
                 sub="CLIs Citadel can launch in a workspace."
                 help="Built-in runtimes are first-class presets Citadel knows by name (and tests via PATH/auth). Custom runtimes are any extra command you want to expose to workspaces — they live in the same list."
               />
-              <AgentsPanel runtimes={data?.runtimes ?? []} />
+              <AgentsPanel runtimes={data?.agentRuntimes ?? []} />
+            </>
+          ) : null}
+          {section === "automations" ? (
+            <>
+              <PageHead
+                title="Automations"
+                sub="Rules that start agents on their own."
+                help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
+              />
+              <AutomationsPanel
+                runtimes={data?.agentRuntimes ?? []}
+                scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
+              />
             </>
           ) : null}
           {section === "repositories" ? (
@@ -216,9 +245,9 @@ export function SettingsView() {
               <PageHead
                 title="Citadel Actions"
                 sub="Configurable prompt presets surfaced as buttons in the cockpit."
-                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+                help="Each action stores a name + description + icon + preferred agent + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
               />
-              <CitadelActionsPanel />
+              <CitadelActionsPanel runtimes={data?.agentRuntimes ?? []} />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}
@@ -226,6 +255,12 @@ export function SettingsView() {
             <>
               <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />
               <McpSection mcpEnabled={Boolean(data?.mcp.enabled)} />
+            </>
+          ) : null}
+          {section === "diagnostics" ? (
+            <>
+              <PageHead title="Diagnostics" sub="Is everything configured? Same checks as `make doctor`." />
+              <DiagnosticsPanel />
             </>
           ) : null}
           {section === "notes" ? (
@@ -243,7 +278,7 @@ export function SettingsView() {
               <PageHead
                 title="Debug"
                 sub="Download a diagnostics bundle when sessions misbehave."
-                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux and terminal lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
               />
               <DebugPanel />
             </>
@@ -263,23 +298,6 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
       {props.sub ? <div className="set-page-sub">{props.sub}</div> : null}
       {props.help ? <div className="set-page-help">{props.help}</div> : null}
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
-  return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={toggle}
-      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label="Toggle theme"
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 

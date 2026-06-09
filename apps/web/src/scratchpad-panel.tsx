@@ -22,11 +22,16 @@ import { useNavigate } from "@tanstack/react-router";
 import { History, Wand2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import { VoiceCaptureButton } from "./components/voice-capture-button.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
+import { useScratchpadComposerVoiceTarget } from "./scratchpad-composer-voice-hook.js";
+import { ScratchpadComposer } from "./scratchpad-composer.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
 import { ScratchpadVersionDiffDialog } from "./scratchpad-version-diff-dialog.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
+import { useVoiceMode } from "./voice-mode-provider.js";
 
 // Matches cockpit.tsx's STORAGE_LAST_WORKSPACE constant — duplicated to avoid
 // importing the cockpit module just for a single string.
@@ -49,12 +54,13 @@ type UndoPayload = { block: BlockSummary; previousIds: string[] };
 const SAVE_DEBOUNCE_MS = 1000;
 const UNDO_WINDOW_MS = 5000;
 const PULSE_MS = 800;
-// Auto-scroll-to-bottom tolerance: a scroll position within this many pixels of
-// the bottom counts as "user was at the bottom" so reopening still scrolls.
+// Auto-scroll-to-bottom tolerance; within this many pixels counts as "at bottom".
 const BOTTOM_TOLERANCE = 4;
 
 export function ScratchpadPanel() {
   const { open, setOpen } = useScratchpadDrawer();
+  const { registerTarget, speechSupported, startDictation } = useVoiceMode();
+  useOverlayPresent(open);
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -345,40 +351,37 @@ export function ScratchpadPanel() {
   );
 
   const submitComposer = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<boolean> => {
       const trimmed = text.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0) return false;
       try {
         await api<{ block: BlockSummary; snapshot: ScratchpadSnapshot }>("/api/scratchpad/blocks", {
           method: "POST",
           body: JSON.stringify({ text }),
         });
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
         setComposer("");
         setComposerError(null);
         await loadBlocks();
         composerRef.current?.focus();
+        return true;
       } catch (error) {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
         setComposerError(error instanceof Error ? error.message : "save_failed");
+        return false;
       }
     },
     [loadBlocks],
   );
 
-  const onComposerKey = useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        void submitComposer(event.currentTarget.value);
-      }
-    },
-    [submitComposer],
-  );
-
-  const onComposerBlur = useCallback(() => {
-    if (composer.trim().length > 0) void submitComposer(composer);
-  }, [composer, submitComposer]);
+  const { target: composerVoiceTarget, inputRef: composerVoiceInputRef } = useScratchpadComposerVoiceTarget({
+    composerRef,
+    loaded,
+    open,
+    onDraftChange: setComposer,
+    registerTarget,
+    submitDraft: submitComposer,
+  });
 
   const requestDelete = useCallback(
     async (id: string) => {
@@ -553,7 +556,7 @@ export function ScratchpadPanel() {
     if (lastWorkspaceId) {
       try {
         const state = await api<{ workspaces: Workspace[] }>("/api/state");
-        repoId = state.workspaces.find((w) => w.id === lastWorkspaceId)?.repoId;
+        repoId = state.workspaces.find((w) => w.id === lastWorkspaceId)?.repoId ?? undefined;
       } catch {
         /* fall back to daemon's default resolution */
       }
@@ -672,30 +675,22 @@ export function ScratchpadPanel() {
                     />
                   ))}
                 </div>
-                <div className="scratchpad-composer">
-                  {composerError ? (
-                    <p className="scratchpad-composer-error" role="alert">
-                      {composerError}
-                    </p>
-                  ) : null}
-                  <textarea
-                    ref={composerRef}
-                    className="scratchpad-composer-input"
-                    aria-label="New scratchpad block"
-                    placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
-                    value={composer}
-                    onChange={(event) => setComposer(event.target.value)}
-                    onInput={(event) => {
-                      const el = event.currentTarget;
-                      el.style.height = "auto";
-                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-                    }}
-                    onKeyDown={onComposerKey}
-                    onBlur={onComposerBlur}
-                    disabled={!loaded}
-                    rows={2}
-                  />
-                </div>
+                <ScratchpadComposer
+                  inputRef={composerVoiceInputRef}
+                  value={composer}
+                  loaded={loaded}
+                  error={composerError}
+                  onChange={setComposer}
+                  onSubmit={submitComposer}
+                  actions={
+                    <VoiceCaptureButton
+                      speechSupported={speechSupported}
+                      target={composerVoiceTarget}
+                      startDictation={startDictation}
+                      disabled={!loaded}
+                    />
+                  }
+                />
                 {undo ? (
                   <output className="scratchpad-undo-toast">
                     <span>Block deleted.</span>

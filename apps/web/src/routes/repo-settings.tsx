@@ -1,12 +1,47 @@
 import type { HookDiagnostic, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, RefreshCcw, Save, Trash2 } from "lucide-react";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { ArrowLeft, RefreshCcw, Save, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { Button } from "../components/ui/button.js";
 import { formatLabel } from "../labels.js";
+
+type ScaffoldHookResponse = {
+  workspaceId: string;
+  sessionId: string | null;
+  branchName: string;
+  workspacePath: string;
+  operationId: string | null;
+  reused: boolean;
+};
+
+// Reach the daemon's POST /api/repos/:repoId/scaffold-hook with the standard
+// api() wrapper. Returns the spawned (or reused) workspace + session so the
+// cockpit can navigate the operator to the agent's terminal.
+function useScaffoldHook(repoId: string) {
+  const navigate = useNavigate();
+  return useMutation({
+    mutationFn: () => api<ScaffoldHookResponse>(`/api/repos/${repoId}/scaffold-hook`, { method: "POST" }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["state"] });
+      navigate({ to: "/" });
+    },
+  });
+}
+
+// Detect an in-flight hook-scaffold-* workspace for this repo (driven by app
+// state, not a separate endpoint — workspaces are already in the cockpit's
+// state snapshot). Used both to disable the empty-state button and to render
+// a banner at the top of the page.
+function useInFlightScaffold(repoId: string) {
+  const state = useStateQuery();
+  const workspaces = state.data?.workspaces ?? [];
+  return workspaces.find(
+    (ws) => ws.repoId === repoId && ws.lifecycle === "ready" && ws.branch.startsWith("hook-scaffold-"),
+  );
+}
 
 export function RepoSettingsView() {
   const params = useParams({ strict: false }) as { repoId?: string };
@@ -41,6 +76,7 @@ export function RepoSettingsView() {
           </Link>
         </div>
       </header>
+      <ScaffoldInFlightBanner repoId={repo.id} />
       <div className="grid">
         <RepoIdentitySection repo={repo} />
         <RepoHooksSection repo={repo} />
@@ -52,18 +88,36 @@ export function RepoSettingsView() {
   );
 }
 
+function ScaffoldInFlightBanner(props: { repoId: string }) {
+  const inFlight = useInFlightScaffold(props.repoId);
+  if (!inFlight) return null;
+  return (
+    <div className="scaffold-banner">
+      <Sparkles size={14} />
+      <span>
+        Hook scaffold session in-flight on branch <code>{inFlight.branch}</code>.
+      </span>
+      <Link to="/" className="settings-link">
+        Open workspace
+      </Link>
+    </div>
+  );
+}
+
 function RepoIdentitySection(props: { repo: Repo }) {
   const [name, setName] = useState(props.repo.name);
   const [worktreeParent, setWorktreeParent] = useState(props.repo.worktreeParent);
+  const [showMainWorkspace, setShowMainWorkspace] = useState(props.repo.showMainWorkspace === true);
   useEffect(() => {
     setName(props.repo.name);
     setWorktreeParent(props.repo.worktreeParent);
-  }, [props.repo.name, props.repo.worktreeParent]);
+    setShowMainWorkspace(props.repo.showMainWorkspace === true);
+  }, [props.repo.name, props.repo.worktreeParent, props.repo.showMainWorkspace]);
   const mutation = useMutation({
     mutationFn: () =>
       api(`/api/repos/${props.repo.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ name, worktreeParent }),
+        body: JSON.stringify({ name, worktreeParent, showMainWorkspace }),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
@@ -92,6 +146,14 @@ function RepoIdentitySection(props: { repo: Repo }) {
         <label>
           Default branch (read-only)
           <input value={props.repo.defaultBranch} readOnly />
+        </label>
+        <label className="repo-main-workspace-toggle">
+          <input
+            type="checkbox"
+            checked={showMainWorkspace}
+            onChange={(event) => setShowMainWorkspace(event.currentTarget.checked)}
+          />
+          <span>Show main repo location in navigation</span>
         </label>
         <Button type="submit" disabled={mutation.isPending}>
           <Save size={14} /> Save identity
@@ -178,11 +240,24 @@ function RepoHooksSection(props: { repo: Repo }) {
             {hook.validationErrors.length ? <pre>{hook.validationErrors.join("\n")}</pre> : null}
           </details>
         ))}
-        {diagnostics.data && !diagnostics.data.diagnostics.length ? (
-          <div className="empty compact">No hooks bound to this repo</div>
-        ) : null}
+        {diagnostics.data && !diagnostics.data.diagnostics.length ? <NoHooksEmptyState repoId={props.repo.id} /> : null}
       </div>
     </section>
+  );
+}
+
+function NoHooksEmptyState(props: { repoId: string }) {
+  const inFlight = useInFlightScaffold(props.repoId);
+  const scaffold = useScaffoldHook(props.repoId);
+  return (
+    <div className="empty compact scaffold-empty">
+      <div>No hooks bound to this repo.</div>
+      <Button type="button" variant="secondary" onClick={() => scaffold.mutate()} disabled={scaffold.isPending}>
+        <Sparkles size={14} />
+        {inFlight ? "Resume scaffold session" : "Scaffold with AI"}
+      </Button>
+      {scaffold.error ? <div className="form-error">{String(scaffold.error)}</div> : null}
+    </div>
   );
 }
 
@@ -212,7 +287,8 @@ function RepoDeployHookSection(props: { repo: Repo }) {
           Citadel resolves the deploy hook per-worktree. The repo-static file at <code>.citadel/hooks/deploy</code>{" "}
           takes priority; this command runs as a fallback. The hook is invoked with <code>$1=list|redeploy</code> and{" "}
           <code>$2=app-name</code>, cwd = the worktree path, and env <code>CITADEL_WORKSPACE_ID</code>,{" "}
-          <code>CITADEL_WORKSPACE_PATH</code>, <code>CITADEL_WORKSPACE_BRANCH</code>, <code>CITADEL_REPO_ID</code>.
+          <code>CITADEL_WORKSPACE_PATH</code>, <code>CITADEL_WORKSPACE_BRANCH</code>, <code>CITADEL_REPO_ID</code>. An
+          executable companion file at <code>.citadel/hooks/undeploy</code> enables undeploy buttons.
         </p>
         <label>
           Deploy command (bash)

@@ -8,7 +8,7 @@ import type { GitHubQuotaResource, GitHubQuotaSummary } from "@citadel/contracts
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { resolveFixConflictsPrompt } from "@citadel/hooks";
-import type { OperationService } from "@citadel/operations";
+import type { OperationService, RunAutoTransitionsDep } from "@citadel/operations";
 import { getGhCooldown, isRateLimitError, setGhCooldown } from "@citadel/providers";
 import type express from "express";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
@@ -28,18 +28,28 @@ export function registerWorkspaceExtraRoutes(input: {
   emit: Emit;
   asyncRoute: AsyncRoute;
   operations: OperationService;
+  runAutoTransitions?: RunAutoTransitionsDep | null;
   config: CitadelConfig;
 }) {
   const { app, store, emit, asyncRoute, operations, config } = input;
+  const runAutoTransitions = input.runAutoTransitions ?? null;
   let githubQuotaCache: { expiresAt: number; value: GitHubQuotaSummary } | null = null;
+  const resolveWorkspaceRepo = (workspaceId: string) => {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return { ok: false as const, error: "workspace_not_found" as const };
+    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) return { ok: false as const, error: "repo_not_found" as const };
+    return { ok: true as const, repo, workspace };
+  };
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const checkoutId = requestString(req.query.checkoutId);
       try {
-        const summary = await operations.listDeployedApps({ workspaceId });
+        const summary = await operations.listDeployedApps({ workspaceId, checkoutId });
         res.json(summary);
       } catch (error) {
         const message = error instanceof Error ? error.message : "deploy_hook_list_failed";
@@ -53,17 +63,18 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const body = (req.body ?? {}) as { name?: unknown };
-      let appName: string | undefined;
-      if (body.name !== undefined && body.name !== null && body.name !== "") {
-        if (typeof body.name !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim())) {
-          return res.status(400).json({ error: "invalid_app_name" });
-        }
-        appName = body.name.trim();
-      }
+      const body = (req.body ?? {}) as { name?: unknown; checkoutId?: unknown };
+      const checkoutId = requestString(body.checkoutId);
+      const parsedName = requestAppName(body.name);
+      if (!parsedName.ok) return res.status(400).json({ error: parsedName.error });
       try {
-        const result = await operations.redeployApp({ workspaceId, appName });
-        emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
+        const result = await operations.redeployApp({ workspaceId, checkoutId, appName: parsedName.appName });
+        emit("workspace.deploy.redeploy", {
+          workspaceId,
+          checkoutId,
+          operationId: result.operationId,
+          status: result.status,
+        });
         res.status(result.status === "succeeded" ? 202 : 424).json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : "deploy_hook_redeploy_failed";
@@ -72,9 +83,52 @@ export function registerWorkspaceExtraRoutes(input: {
     }),
   );
 
+  app.post(
+    "/api/workspaces/:workspaceId/deployed-apps/undeploy",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const body = (req.body ?? {}) as { name?: unknown; checkoutId?: unknown };
+      const checkoutId = requestString(body.checkoutId);
+      const parsedName = requestAppName(body.name);
+      if (!parsedName.ok) return res.status(400).json({ error: parsedName.error });
+      try {
+        const result = await operations.undeployApp({ workspaceId, checkoutId, appName: parsedName.appName });
+        emit("workspace.deploy.undeploy", {
+          workspaceId,
+          checkoutId,
+          operationId: result.operationId,
+          status: result.status,
+        });
+        res.status(result.status === "succeeded" ? 202 : 424).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "undeploy_hook_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
+
   app.get("/api/workspaces/archived", (_req, res) => {
     res.json({ workspaces: store.listArchivedWorkspaces() });
   });
+
+  app.get(
+    "/api/workspaces/:workspaceId/removal-check",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      try {
+        const result = operations.checkWorkspaceRemoval({
+          workspaceId,
+          archiveOnly: req.query.archiveOnly === "true",
+        });
+        res.status(result.removable ? 200 : 409).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "workspace_removal_check_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
 
   app.patch(
     "/api/workspaces/:workspaceId",
@@ -93,9 +147,31 @@ export function registerWorkspaceExtraRoutes(input: {
       if (typeof patch.slackThreadUrl === "string" || patch.slackThreadUrl === null)
         allowed.slackThreadUrl = patch.slackThreadUrl as string | null;
       if (typeof patch.pinned === "boolean") allowed.pinned = patch.pinned;
+      const prevIssueKey = workspace.issueKey;
       store.updateWorkspace(workspace.id, allowed);
       const next = store.listWorkspaces().find((candidate) => candidate.id === workspace.id);
       emit("workspace.updated", { workspaceId: workspace.id, workspace: next });
+      // Fire workspace.issue_attached only when issueKey transitions from
+      // null|different value → new non-null value. Unattach (value → null)
+      // and no-change (null → null or value → same value) must NOT fire,
+      // otherwise the auto-transition would race against the operator's
+      // unattach intent.
+      if (
+        next &&
+        runAutoTransitions &&
+        allowed.issueKey !== undefined &&
+        next.issueKey != null &&
+        next.issueKey !== prevIssueKey
+      ) {
+        const repo = store.listRepos().find((r) => r.id === next.repoId);
+        if (repo) {
+          try {
+            await runAutoTransitions("workspace.issue_attached", repo, next, { repo, workspace: next });
+          } catch {
+            /* logged inside callback */
+          }
+        }
+      }
       res.json({ workspace: next });
     }),
   );
@@ -114,22 +190,21 @@ export function registerWorkspaceExtraRoutes(input: {
     }),
   );
 
-  app.patch(
-    "/api/agent-sessions/:sessionId",
-    asyncRoute(async (req: express.Request, res: express.Response) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const patch = (req.body ?? {}) as Record<string, unknown>;
-      const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
-      if (!displayName) return res.status(400).json({ error: "display_name_required" });
-      const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-      if (!session) return res.status(404).json({ error: "session_not_found" });
-      store.updateSessionDisplayName(sessionId, displayName);
-      const updated = store.listSessions().find((candidate) => candidate.id === sessionId);
-      emit("agent.updated", { sessionId });
-      res.json({ session: updated });
-    }),
-  );
+  const renameWorkspaceSession = asyncRoute(async (req: express.Request, res: express.Response) => {
+    const sessionId = req.params.sessionId;
+    if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+    const patch = (req.body ?? {}) as Record<string, unknown>;
+    const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
+    if (!displayName) return res.status(400).json({ error: "display_name_required" });
+    const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    store.updateWorkspaceSessionDisplayName(sessionId, displayName);
+    const updated = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    emit(session.kind === "agent" ? "agent.updated" : "terminal.updated", { sessionId });
+    res.json({ session: updated });
+  });
+  app.patch("/api/workspace-sessions/:sessionId", renameWorkspaceSession);
+  app.patch("/api/agent-sessions/:sessionId", renameWorkspaceSession);
 
   // GitHub search/clone helpers used by the AddRepo modal. Both require gh to be
   // available and authenticated; failures surface as structured errors so the UI
@@ -152,24 +227,34 @@ export function registerWorkspaceExtraRoutes(input: {
   app.get(
     "/api/integrations/github/search",
     asyncRoute(async (req: express.Request, res: express.Response) => {
-      const query = typeof req.query.q === "string" ? req.query.q : "";
+      const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
       if (!query) return res.json({ results: [] });
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(
-          "gh",
-          ["search", "repos", query, "--limit", "8", "--json", "fullName,url,description"],
+        const { stdout } = await execFileAsync(
+          config.providers.github.command ?? "gh",
+          ["api", "--method", "GET", "search/repositories", "-f", `q=${query}`, "-f", "per_page=8"],
           { timeout: 10_000 },
         );
-        const parsed = JSON.parse(stdout) as Array<{ fullName: string; url: string; description?: string }>;
+        const parsed = JSON.parse(stdout) as {
+          items?: Array<{
+            full_name?: unknown;
+            html_url?: unknown;
+            description?: unknown;
+            default_branch?: unknown;
+          } | null>;
+        };
         res.json({
-          results: parsed.map((entry) => ({
-            name: entry.fullName,
-            url: entry.url,
-            description: entry.description ?? undefined,
-          })),
+          results: (parsed.items ?? []).flatMap((entry) => {
+            if (!entry || typeof entry.full_name !== "string" || typeof entry.html_url !== "string") return [];
+            return [
+              {
+                name: entry.full_name,
+                url: entry.html_url,
+                description: typeof entry.description === "string" ? entry.description : undefined,
+                defaultBranch: typeof entry.default_branch === "string" ? entry.default_branch : undefined,
+              },
+            ];
+          }),
         });
       } catch (error) {
         res.status(200).json({ results: [], error: error instanceof Error ? error.message : "gh_search_failed" });
@@ -198,10 +283,9 @@ export function registerWorkspaceExtraRoutes(input: {
         return res.json({ rootPath, cloned: false });
       }
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        await exec("gh", ["repo", "clone", url, rootPath], { timeout: 120_000 });
+        await execFileAsync(config.providers.github.command ?? "gh", ["repo", "clone", url, rootPath], {
+          timeout: 120_000,
+        });
         res.json({ rootPath, cloned: true });
       } catch (error) {
         res.status(200).json({
@@ -233,16 +317,27 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const hookResult = await operations.runHookEvent({
+        event: "merge.conflict.detected",
+        repo,
+        workspace,
+        operationType: "merge.conflict.detected",
+        operationMessage: "Running merge-conflict hooks",
+        payload: { reason: "operator-requested", request: req.body ?? {} },
+      });
+      if (hookResult.ran > 0) {
+        emit("operation.updated", { operationId: hookResult.operationId });
+        emit("agent.updated", { workspaceId: workspace.id });
+        return res.status(202).json({ hooked: true, operationId: hookResult.operationId, promptSource: "hook" });
+      }
       // Require a non-shell agent runtime. The fix-conflicts prompt is
       // multi-line ("git pull origin main", "make check", "git push"); if it
       // were pasted into a bash/sh/zsh/fish tmux pane those would execute
       // line-by-line as shell commands. The invariant is "the runtime is an
-      // agent TUI, not a shell" — checked against the runtime's `command`
-      // (id !== "shell" is too narrow — any id can point at command:"bash").
+      // agent TUI, not a plain shell" — checked against the runtime's command.
       // We do NOT require runtime.promptArg: the canonical claude-code
       // runtime intentionally omits it (Claude's `-p` is non-interactive
       // print mode), and createAgentSession pastes the prompt into the TUI
@@ -251,11 +346,10 @@ export function registerWorkspaceExtraRoutes(input: {
       const isShellCommand = (cmd: string) => ["bash", "sh", "zsh", "fish"].includes(cmd);
       const requestedRuntimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined;
       const runtime = requestedRuntimeId
-        ? config.runtimes.find((candidate) => candidate.id === requestedRuntimeId)
-        : config.runtimes.find((candidate) => candidate.id !== "shell" && !isShellCommand(candidate.command));
+        ? config.agentRuntimes.find((candidate) => candidate.id === requestedRuntimeId)
+        : config.agentRuntimes.find((candidate) => !isShellCommand(candidate.command));
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      if (runtime.id === "shell" || isShellCommand(runtime.command))
-        return res.status(400).json({ error: "runtime_must_be_agent" });
+      if (isShellCommand(runtime.command)) return res.status(400).json({ error: "runtime_must_be_agent" });
       const resolved = await resolveFixConflictsPrompt({
         workspacePath: workspace.path,
         workspaceId: workspace.id,
@@ -297,6 +391,46 @@ export function registerWorkspaceExtraRoutes(input: {
       res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
     }),
   );
+
+  app.post(
+    "/api/workspaces/:workspaceId/review-requested",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const body = (req.body ?? {}) as { reason?: unknown };
+      const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : "manual";
+      const hookResult = await operations.runHookEvent({
+        event: "review.requested",
+        repo,
+        workspace,
+        operationType: "review.requested",
+        operationMessage: "Running review-requested hooks",
+        payload: { reason, request: req.body ?? {} },
+      });
+      emit("operation.updated", { operationId: hookResult.operationId });
+      if (hookResult.ran === 0)
+        return res
+          .status(404)
+          .json({ hooked: false, operationId: hookResult.operationId, error: "review_hook_not_found" });
+      emit("agent.updated", { workspaceId: workspace.id });
+      res.status(202).json({ hooked: true, operationId: hookResult.operationId });
+    }),
+  );
+}
+
+function requestString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function requestAppName(value: unknown): { ok: true; appName: string | undefined } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") return { ok: true, appName: undefined };
+  if (typeof value !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(value.trim())) {
+    return { ok: false, error: "invalid_app_name" };
+  }
+  return { ok: true, appName: value.trim() };
 }
 
 async function readGitHubQuota(

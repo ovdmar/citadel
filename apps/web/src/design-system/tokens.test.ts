@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 //
 // Token catalog verification. Two complementary mechanisms:
 //
@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Window } from "happy-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -110,6 +111,7 @@ describe("design-system tokens.css", () => {
   let tokens: string[];
   let css: string;
   let styleEl: HTMLStyleElement;
+  let win: Window;
 
   beforeAll(() => {
     tokens = loadInventory();
@@ -118,12 +120,22 @@ describe("design-system tokens.css", () => {
   });
 
   beforeEach(() => {
+    win = new Window();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: win });
+    Object.defineProperty(globalThis, "document", { configurable: true, value: win.document });
+    Object.defineProperty(globalThis, "getComputedStyle", {
+      configurable: true,
+      value: win.getComputedStyle.bind(win),
+    });
     styleEl = injectTokens(css);
   });
 
   afterEach(() => {
     styleEl.remove();
     delete document.documentElement.dataset.theme;
+    Reflect.deleteProperty(globalThis, "getComputedStyle");
+    Reflect.deleteProperty(globalThis, "document");
+    Reflect.deleteProperty(globalThis, "window");
   });
 
   function requireBody(selector: string, label: string): string {

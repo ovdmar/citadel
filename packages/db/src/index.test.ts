@@ -7,7 +7,7 @@ import { SqliteStore } from "./index.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("SqliteStore", () => {
@@ -47,10 +47,21 @@ describe("SqliteStore", () => {
       { version: 10 },
       { version: 11 },
       { version: 12 },
+      { version: 13 },
+      { version: 14 },
+      { version: 15 },
+      { version: 16 },
+      { version: 17 },
+      { version: 18 },
+      { version: 19 },
+      { version: 20 },
+      { version: 21 },
+      { version: 22 },
+      { version: 23 },
     ]);
   });
 
-  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+  it("round-trips workspace_sessions.status_reason_at via updateSessionStatus", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
     const store = new SqliteStore(path.join(dir, "test.sqlite"));
@@ -95,9 +106,10 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_srr",
+      kind: "agent",
       workspaceId: "ws_srr",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-26T00:00:00.000Z",
@@ -173,9 +185,10 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_test",
+      kind: "agent",
       workspaceId: "ws_test",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-17T00:02:00.000Z",
@@ -248,7 +261,46 @@ describe("SqliteStore", () => {
         dirty: true,
       },
     ]);
-    expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
+      { kind: "agent", runtime_id: "claude-code" },
+    ]);
+    expect(store.listSessions("ws_test")).toMatchObject([
+      {
+        id: "sess_test",
+        transport: "connected",
+      },
+    ]);
+    store.insertWorkspaceSession({
+      id: "sess_terminal",
+      kind: "terminal",
+      workspaceId: "ws_test",
+      runtimeId: null,
+      displayName: "Terminal",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: "2026-05-17T00:02:00.000Z",
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      terminalBackend: "pty-daemon",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+      ptyLastSeenAt: "2026-05-17T00:02:01.000Z",
+      createdAt: "2026-05-17T00:02:00.000Z",
+      updatedAt: "2026-05-17T00:02:00.000Z",
+    });
+    expect(store.listWorkspaceSessions("ws_test").find((s) => s.id === "sess_terminal")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+    });
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
     expect(store.listActivity("ws_test")).toMatchObject([
       { id: "evt_test", source: "system", hookOutput: { links: [{ label: "Preview" }] } },
@@ -307,9 +359,10 @@ describe("SqliteStore", () => {
     store.insertWorkspace({ ...workspaceBase, id: "ws_delete", path: path.join(dir, "worktrees", "reusable") });
     store.insertSession({
       id: "sess_delete",
+      kind: "agent",
       workspaceId: "ws_delete",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: null,
@@ -421,7 +474,7 @@ describe("SqliteStore", () => {
       cron: "0 9 * * *",
       runAt: null,
       repoId: "repo_sched",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new" as const,
       workspaceName: "recur",
@@ -525,7 +578,7 @@ describe("SqliteStore", () => {
       cron: "* * * * *",
       runAt: null,
       repoId: "repo_runs",
-      runtimeId: "shell",
+      runtimeId: "codex",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "runs",
@@ -687,7 +740,7 @@ describe("SqliteStore", () => {
       cron: "0 * * * *",
       runAt: null,
       repoId: "repo_cascade",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "casc",

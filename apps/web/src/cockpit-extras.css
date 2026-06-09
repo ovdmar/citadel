@@ -120,7 +120,7 @@
   gap: 2px;
 }
 
-.nav-section button {
+.nav-section-icons > button {
   display: inline-grid;
   place-items: center;
   width: 22px;
@@ -132,9 +132,19 @@
   cursor: pointer;
 }
 
-.nav-section button:hover {
+.nav-section-icons > button:hover {
   background: var(--c-line-1);
   color: var(--c-fg-1);
+}
+
+.nav-section-icons > button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.nav-section-icons > button:disabled:hover {
+  background: transparent;
+  color: var(--c-fg-3);
 }
 
 .nav-group {
@@ -180,11 +190,31 @@
   transform: rotate(90deg);
 }
 
-.nav-group-label {
+.nav-group-label-stack {
   flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+}
+
+.nav-group-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-group-sub {
+  min-width: 0;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--c-fg-5);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -244,6 +274,32 @@
   position: relative;
 }
 
+.nav-workspace-target-wrap {
+  display: grid;
+  gap: 2px;
+}
+
+/* Intra-group drag-reorder indicator: a thin accent line above or below
+ * the card during a hover-over-drop. The wrap is `position: relative`
+ * already, so absolute lines slot in without affecting layout. */
+.workspace-card-wrap.is-drop-above::before,
+.workspace-card-wrap.is-drop-below::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--c-accent, #5b8df8);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.workspace-card-wrap.is-drop-above::before {
+  top: -1px;
+}
+.workspace-card-wrap.is-drop-below::after {
+  bottom: -1px;
+}
+
 .workspace-card {
   width: 100%;
   display: grid;
@@ -301,6 +357,11 @@
   padding-right: 28px;
 }
 
+.workspace-card-wrap.has-right-control:hover .workspace-card,
+.workspace-card-wrap.has-right-control:focus-within .workspace-card {
+  padding-right: 10px;
+}
+
 .drop-workspace-backdrop {
   position: fixed;
   inset: 0;
@@ -333,6 +394,60 @@
 
 .drop-workspace-error {
   color: var(--color-danger);
+}
+
+/* Structured summary of uncommitted changes / unpushed commits shown when
+ * the drop is blocked by dirty state. Two collapsible sections; each list
+ * is bounded server-side so we don't need a tall scrollbox here. */
+.drop-workspace-summary {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel-sunken, transparent);
+}
+
+.drop-workspace-summary summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.drop-workspace-summary-list {
+  list-style: none;
+  padding: 4px 0 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.drop-workspace-summary-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.drop-workspace-summary-status,
+.drop-workspace-summary-sha {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre;
+}
+
+.drop-workspace-summary-path,
+.drop-workspace-summary-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .drop-workspace-actions {
@@ -369,6 +484,11 @@
 
 .workspace-card:hover {
   background: var(--c-line-1);
+}
+
+.workspace-card:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
 }
 
 .workspace-card.active {
@@ -481,6 +601,25 @@
   white-space: nowrap;
 }
 
+.workspace-card-lifecycle {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-fg-3);
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.workspace-card-lifecycle.creating {
+  color: var(--color-action);
+}
+
+.workspace-card-lifecycle.failed {
+  color: var(--color-danger);
+}
+
 .workspace-card-right {
   display: flex;
   align-items: center;
@@ -491,6 +630,61 @@
    * right edge inside the same .nav-group. */
   min-width: var(--right-slot);
   justify-content: flex-end;
+}
+
+.workspace-card-right-control {
+  position: absolute;
+  top: 50%;
+  right: 27px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.workspace-card-right-control-spacer {
+  width: 38px;
+  height: 18px;
+  flex: 0 0 38px;
+}
+
+.workspace-card-collapse {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-fg-4);
+  cursor: pointer;
+}
+
+.workspace-card-collapse:hover,
+.workspace-card-collapse:focus-visible {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+  outline: none;
+}
+
+.workspace-card.active .workspace-card-collapse {
+  color: var(--c-on-dark-d);
+}
+
+.workspace-card.active .workspace-card-collapse:hover,
+.workspace-card.active .workspace-card-collapse:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--c-on-dark);
+}
+
+.workspace-card-collapse-icon {
+  transition: transform 120ms ease;
+}
+
+.workspace-card-collapse-icon.open {
+  transform: rotate(90deg);
 }
 
 .workspace-card-diff {
@@ -538,8 +732,7 @@
   text-decoration: none;
 }
 
-.pr-pill.tone-pending,
-.approval-pill.tone-pending {
+.pr-pill.tone-pending {
   background: transparent;
   color: var(--c-warn);
 }
@@ -588,4 +781,13 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-action) 14%, transparent);
   color: var(--color-action);
+}
+
+/* On a deliberately-dark surface (e.g. the active workspace card under a
+ * light cockpit), --color-action resolves to the same dark navy as the
+ * card background, making the chip text invisible. Flip the chip to a
+ * light fill on dark contexts regardless of cockpit theme. */
+[data-cit-on-dark="true"] .workspace-card-issue {
+  background: color-mix(in srgb, var(--c-on-dark) 14%, transparent);
+  color: var(--c-on-dark);
 }

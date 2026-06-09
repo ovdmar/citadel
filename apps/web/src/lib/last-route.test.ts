@@ -67,6 +67,13 @@ describe("last-route storage", () => {
     saveLastRoute("/scratchpad/anything", storage);
     expect(loadLastRoute(storage)).toBeNull();
   });
+
+  it("does not persist scratchpad overlay query URLs", () => {
+    saveLastRoute("/?scratchpad=1", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+    saveLastRoute("/settings?scratchpad=1", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+  });
 });
 
 describe("isBareRootLanding", () => {

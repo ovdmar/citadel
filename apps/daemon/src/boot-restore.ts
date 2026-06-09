@@ -35,14 +35,12 @@ const LIVE_STATUSES: ReadonlyArray<string> = [
   "usage_limited",
 ];
 
-// systemd starts citadel.service with Wants/After=citadel-tmux.service, but
-// "After" only orders the *start command*, not socket readiness. Empirically
-// the daemon can beat tmux to readiness by a few hundred ms, in which case
-// listAllTmuxSessions() returns null on the first call — and the original
-// reconcile path treated that as "skip", leaving every DB row pinned in
-// `running` until status-monitor caught up minutes later. Retry briefly so
-// the common race resolves itself without a user-visible "0 sessions
-// restored" outcome.
+// Workspace tmux servers are created on demand by tmux. During boot or after
+// a daemon restart, the first listAllTmuxSessions() call can still race socket
+// readiness and return null — and the original reconcile path treated that as
+// "skip", leaving every DB row pinned in `running` until status-monitor caught
+// up minutes later. Retry briefly so the common race resolves itself without a
+// user-visible "0 sessions restored" outcome.
 async function awaitTmuxSessions(
   probe: () => Set<string> | null,
   timeoutMs: number,
@@ -108,7 +106,7 @@ async function reconcileStaleLiveRows(
     // a non-null but incomplete set. A retried `has-session -t <name>` is
     // the second opinion (3 attempts, 250ms apart); skip the flip whenever
     // it confirms the pane is still alive. This is what stops the cockpit
-    // from showing a Restore banner for sessions whose tmux + ttyd are
+    // from showing a Restore banner for sessions whose tmux viewer path is
     // perfectly fine.
     if (await hasSession(session.tmuxSessionName)) continue;
     store.updateSessionStatus(session.id, {
@@ -156,6 +154,26 @@ const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 let currentSummary: BootRestoreSummary | null = null;
 
+function listKnownTmuxSessions(store: SqliteStore): Set<string> | null {
+  const sockets = new Set<string | null>();
+  for (const session of store.listSessions()) {
+    if (session.tmuxSessionName) sockets.add(session.tmuxSocketName ?? null);
+  }
+  if (sockets.size === 0) return listAllTmuxSessions();
+
+  const names = new Set<string>();
+  let legacySocketUnreachable = false;
+  for (const socketName of sockets) {
+    const sessions = listAllTmuxSessions(socketName);
+    if (sessions === null) {
+      if (socketName === null) legacySocketUnreachable = true;
+      continue;
+    }
+    for (const sessionName of sessions) names.add(sessionName);
+  }
+  return names.size === 0 && legacySocketUnreachable && sockets.size === 1 ? null : names;
+}
+
 export function getBootRestoreSummary(): BootRestoreSummary | null {
   return currentSummary;
 }
@@ -182,9 +200,8 @@ export type BootRestoreDeps = {
   // matches the pre-fix behaviour so tests that don't care still pass.
   hasTmuxSession?: (name: string) => boolean;
   // How long to keep retrying the tmux probe before giving up. Production
-  // default covers the systemd startup race (citadel.service can outrun
-  // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
-  // 0 to short-circuit since their stubs are deterministic.
+  // default covers workspace tmux socket readiness races. Tests pass 0 to
+  // short-circuit since their stubs are deterministic.
   tmuxReadinessTimeoutMs?: number;
   // Optional diagnostics sink — same structural shape as the global
   // DiagnosticsLogger. boot-restore emits one event per flip decision so the
@@ -200,7 +217,11 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   // exactly the failure mode where the user expects everything to come back
   // but nothing does. Flip them to `terminated` first; then they appear as
   // candidates below and get resumed via `claude --resume <uuid>`.
-  const probe = deps.listTmuxSessions ?? listAllTmuxSessions;
+  const sessionSocketByName = new Map<string, string | null>();
+  for (const session of deps.store.listSessions()) {
+    if (session.tmuxSessionName) sessionSocketByName.set(session.tmuxSessionName, session.tmuxSocketName ?? null);
+  }
+  const probe = deps.listTmuxSessions ?? (() => listKnownTmuxSessions(deps.store));
   const tmuxReadinessTimeoutMs = deps.tmuxReadinessTimeoutMs ?? 5000;
   const liveTmuxNames = await awaitTmuxSessions(probe, tmuxReadinessTimeoutMs);
   if (liveTmuxNames === null && tmuxReadinessTimeoutMs > 0) {
@@ -212,7 +233,8 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   // failed probe is never authoritative (see feedback_reaper_retries.md).
   // Tests override via deps.hasTmuxSession and bypass the retry — their
   // stubs are deterministic.
-  const hasSessionBase = deps.hasTmuxSession ?? tmuxSessionExists;
+  const hasSessionBase =
+    deps.hasTmuxSession ?? ((name: string) => tmuxSessionExists(name, sessionSocketByName.get(name) ?? null));
   const hasSession = deps.hasTmuxSession
     ? hasSessionBase
     : (name: string) => hasSessionWithRetries(hasSessionBase, name, { attempts: 3, delayMs: 250 });
@@ -275,7 +297,7 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
     const entry = summary.entries[i];
     if (!entry) continue;
     try {
-      const runtime = deps.config.runtimes.find((r) => r.id === candidate.runtimeId);
+      const runtime = deps.config.agentRuntimes.find((r) => r.id === candidate.runtimeId);
       if (!runtime) {
         entry.error = `runtime_not_found:${candidate.runtimeId}`;
         continue;
@@ -308,6 +330,7 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
           runtimeId: candidate.runtimeId,
           displayName: runtime.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          resumeSourceSessionId: candidate.sourceSessionId,
           // Inherit the source row's tab slot so the cockpit places the
           // restored conversation back where it lived before.
           tabId: candidate.sourceTabId,

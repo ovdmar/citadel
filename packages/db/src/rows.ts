@@ -1,6 +1,5 @@
 import type {
   ActivityEvent,
-  AgentSession,
   BackgroundAgentSession,
   HookOutput,
   Operation,
@@ -9,6 +8,7 @@ import type {
   ScheduledAgent,
   ScheduledAgentRun,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 
 export function asString(row: Record<string, unknown>, key: string) {
@@ -33,6 +33,8 @@ export function repoFromRow(row: Record<string, unknown>): Repo {
     defaultBranch: asString(row, "default_branch"),
     defaultRemote: asString(row, "default_remote"),
     worktreeParent: asString(row, "worktree_parent"),
+    providerRepositoryKey: row.provider_repository_key ? asString(row, "provider_repository_key") : null,
+    showMainWorkspace: Number(row.show_main_workspace ?? 0) === 1,
     setupHookIds: jsonArray(row, "setup_hook_ids"),
     teardownHookIds: jsonArray(row, "teardown_hook_ids"),
     providerIds: jsonArray(row, "provider_ids"),
@@ -44,15 +46,30 @@ export function repoFromRow(row: Record<string, unknown>): Repo {
 }
 
 export function workspaceFromRow(row: Record<string, unknown>): Workspace {
+  const parentIssue =
+    row.parent_issue_provider && row.parent_issue_key
+      ? {
+          provider: asString(row, "parent_issue_provider"),
+          key: asString(row, "parent_issue_key"),
+          url: row.parent_issue_url ? asString(row, "parent_issue_url") : null,
+          title: row.parent_issue_title ? asString(row, "parent_issue_title") : null,
+          status: row.parent_issue_status ? asString(row, "parent_issue_status") : null,
+          fetchedAt: null,
+        }
+      : undefined;
   return {
     id: asString(row, "id"),
-    repoId: asString(row, "repo_id"),
+    repoId: row.repo_id ? asString(row, "repo_id") : null,
     name: asString(row, "name"),
     path: asString(row, "path"),
+    rootPath: row.root_path ? asString(row, "root_path") : undefined,
+    mode: row.mode ? (asString(row, "mode") as Workspace["mode"]) : undefined,
     branch: asString(row, "branch"),
     baseBranch: asString(row, "base_branch"),
     source: asString(row, "source") as Workspace["source"],
     kind: ((row.kind as string) ?? "worktree") as Workspace["kind"],
+    lifecyclePhase: row.lifecycle_phase ? (asString(row, "lifecycle_phase") as Workspace["lifecyclePhase"]) : undefined,
+    parentIssue,
     prUrl: row.pr_url ? asString(row, "pr_url") : null,
     issueKey: row.issue_key ? asString(row, "issue_key") : null,
     issueTitle: row.issue_title ? asString(row, "issue_title") : null,
@@ -69,13 +86,18 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
   };
 }
 
-export function sessionFromRow(row: Record<string, unknown>): AgentSession {
-  return {
+export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
+  const kind = asString(row, "kind") === "terminal" ? "terminal" : "agent";
+  const terminalBackend: WorkspaceSession["terminalBackend"] =
+    asString(row, "terminal_backend") === "pty-daemon" ? "pty-daemon" : "tmux";
+  const base = {
     id: asString(row, "id"),
+    kind,
     workspaceId: asString(row, "workspace_id"),
-    runtimeId: asString(row, "runtime_id"),
+    targetType: row.target_type ? (asString(row, "target_type") as WorkspaceSession["targetType"]) : undefined,
+    checkoutId: row.checkout_id ? asString(row, "checkout_id") : null,
     displayName: asString(row, "display_name"),
-    status: asString(row, "status") as AgentSession["status"],
+    status: asString(row, "status") as WorkspaceSession["status"],
     statusReason: row.status_reason ? asString(row, "status_reason") : null,
     statusReasonAt: row.status_reason_at ? asString(row, "status_reason_at") : null,
     // `||` (not `??`) is deliberate: asString() returns "" for null DB columns,
@@ -84,14 +106,36 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     lastOutputAt: row.last_output_at ? asString(row, "last_output_at") : null,
     endedAt: row.ended_at ? asString(row, "ended_at") : null,
     exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
-    transport: asString(row, "transport") as AgentSession["transport"],
+    transport: asString(row, "transport") as WorkspaceSession["transport"],
+    terminalBackend,
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    tmuxSocketName: row.tmux_socket_name ? asString(row, "tmux_socket_name") : null,
+    ptySessionId: row.pty_session_id ? asString(row, "pty_session_id") : null,
+    ptyOwnerSocket: row.pty_owner_socket ? asString(row, "pty_owner_socket") : null,
+    ptyOwnerPid: row.pty_owner_pid === null || row.pty_owner_pid === undefined ? null : Number(row.pty_owner_pid),
+    ptyLastSeenAt: row.pty_last_seen_at ? asString(row, "pty_last_seen_at") : null,
     // Fall back to the row id when tab_id is unset (older rows from before
     // migration 11, or in-memory fixtures that skip the migration). Treats
     // every legacy row as its own tab — matches pre-migration ordering.
     tabId: row.tab_id ? asString(row, "tab_id") : asString(row, "id"),
     runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
+    systemPromptSources: row.system_prompt_sources
+      ? (jsonArray(row, "system_prompt_sources") as WorkspaceSession["systemPromptSources"])
+      : null,
+    systemPromptDelivery: jsonObject<WorkspaceSession["systemPromptDelivery"]>(row, "system_prompt_delivery"),
+    systemPromptLastDelivery: jsonObject<WorkspaceSession["systemPromptLastDelivery"]>(
+      row,
+      "system_prompt_last_delivery",
+    ),
+    role: row.role ? (asString(row, "role") as WorkspaceSession["role"]) : null,
+    actionId: row.action_id ? asString(row, "action_id") : null,
+    managed: Number(row.managed ?? 0) === 1,
+    parentSessionId: row.parent_session_id ? asString(row, "parent_session_id") : null,
+    planVersionId: row.plan_version_id ? asString(row, "plan_version_id") : null,
+    managerActionId: row.manager_action_id ? asString(row, "manager_action_id") : null,
+    closedAt: row.closed_at ? asString(row, "closed_at") : null,
+    launchWarnings: jsonArray(row, "launch_warnings"),
     rateLimitResumeAttempts:
       row.rate_limit_resume_attempts === null || row.rate_limit_resume_attempts === undefined
         ? 0
@@ -103,6 +147,9 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };
+  return kind === "terminal"
+    ? { ...base, kind, runtimeId: null }
+    : { ...base, kind, runtimeId: asString(row, "runtime_id") };
 }
 
 export function operationFromRow(row: Record<string, unknown>): Operation {

@@ -1,6 +1,8 @@
+import { ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { ActivityEvent, BackgroundAgentSession } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { ensureTmuxSessionRaw, killTmuxSession, pipeBackgroundSessionToLog, submitPrompt } from "@citadel/terminal";
 
 type RuntimeDescriptor = { command: string; args: string[]; displayName: string; promptArg: string | null };
@@ -45,12 +47,16 @@ export async function createBackgroundAgentSession(
   // Embed prompt as a CLI arg if the runtime supports it (claude-code, codex);
   // otherwise paste it into the pane once tmux is ready. Mirrors
   // createAgentSession's logic.
-  const runtimeArgs = [...input.runtime.args];
+  const runtimeArgs = ensureCodexGoalsFeatureArgs(input.runtimeId, input.runtime.args);
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (input.runtime.promptArg) runtimeArgs.push(input.runtime.promptArg, input.prompt);
     else promptForKeys = input.prompt;
   }
+  const codexSqliteHome =
+    input.runtimeId === "codex"
+      ? prepareCodexSqliteHomeForWorkspace({ workspaceId: `background_${input.scheduledAgentId}` })
+      : null;
 
   let tmux: { tmuxSessionName: string; tmuxSessionId: string };
   try {
@@ -59,6 +65,7 @@ export async function createBackgroundAgentSession(
       cwd: input.cwd,
       command: input.runtime.command,
       args: runtimeArgs,
+      ...(codexSqliteHome ? { env: { CODEX_HOME: null, CODEX_SQLITE_HOME: codexSqliteHome } } : {}),
     });
   } catch (error) {
     // Best-effort cleanup: kill the session if it half-spawned.

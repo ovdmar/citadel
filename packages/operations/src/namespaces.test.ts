@@ -9,7 +9,7 @@ import { OperationService } from "./index.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("namespace operations", () => {
@@ -99,6 +99,28 @@ describe("namespace operations", () => {
     expect(store.listActivity().length).toBe(beforeRename);
   });
 
+  it("persists namespace reorder order", () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const bravo = service.createNamespace({ name: "Bravo" }).namespace;
+    const alpha = service.createNamespace({ name: "Alpha" }).namespace;
+    expect(service.listNamespaces().map((namespace) => namespace.name)).toEqual(["Bravo", "Alpha"]);
+
+    const result = service.reorderNamespaces({ namespaceIds: [alpha.id, bravo.id] });
+    expect(result).toMatchObject({ reordered: true });
+    expect(service.listNamespaces().map((namespace) => namespace.name)).toEqual(["Alpha", "Bravo"]);
+    expect(service.reorderNamespaces({ namespaceIds: [alpha.id, alpha.id] })).toMatchObject({
+      reordered: false,
+      reason: "namespace_order_mismatch",
+    });
+  });
+
   it("createAgentSession reassigns the workspace to the supplied namespaceId", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -113,8 +135,8 @@ describe("namespace operations", () => {
     const created = await service.createWorkspace({ repoId: repo.id, name: "ws-x", source: "scratch" });
     expect(store.listWorkspaces().find((entry) => entry.id === created.workspaceId)?.namespaceId).toBeNull();
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell", namespaceId: namespace.id },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent", namespaceId: namespace.id },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     try {
       expect(session.workspaceId).toBe(created.workspaceId);

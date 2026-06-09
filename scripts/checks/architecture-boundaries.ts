@@ -35,14 +35,23 @@ const rules: Rule[] = [
       "node:",
     ],
   },
+  {
+    // @citadel/hooks owns the file-based hook discovery + frontmatter +
+    // template surfaces. It must stay free of @citadel/operations because
+    // operations IS the wiring layer that injects dispatchAgentHook into
+    // the hooks runner — taking a direct edge would invert the dependency.
+    scope: "packages/hooks/src",
+    forbidden: ["@citadel/operations"],
+  },
 ];
 
 const violations: string[] = [];
 for (const rule of rules) {
   for (const file of walk(path.join(root, rule.scope))) {
-    // Test files always execute under Node (vitest runs in Node), so they
-    // legitimately import node:* APIs even when the production bundle for
-    // the same package must not. Skip *.test.* files in boundary checks.
+    // Architecture boundaries protect production code. Test files
+    // (*.test.ts, *.test.tsx, *.test.js, *.test.jsx) legitimately introspect source files — e.g.
+    // reading CSS via node:fs to run regex audits, or shimming DOM APIs
+    // — so exempt them from the import allowlist.
     if (/\.test\.(ts|tsx|js|jsx)$/.test(file)) continue;
     const text = fs.readFileSync(file, "utf8");
     for (const forbidden of rule.forbidden) {

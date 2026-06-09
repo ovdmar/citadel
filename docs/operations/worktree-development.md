@@ -7,7 +7,7 @@ from. There are exactly two commands you need.
 
 | Command | Audience | What it does |
 |---|---|---|
-| `make install` | A user (or your devbox) installing Citadel for long-term use | Writes/refreshes the systemd `--user` unit `citadel.service` so it supervises *this* checkout. Idempotent. Run it once per machine, and again whenever you `git pull` on the long-term checkout or swap it. |
+| `make install` | A user (or your devbox) installing Citadel for long-term use | Resolves the latest released tag by default (or `REF=main` / `REF=vX.Y.Z`), writes/refreshes the systemd `--user` unit `citadel.service` so it supervises *this* checkout, restarts the daemon, and runs doctor. |
 | `make deploy` | A dev working on Citadel itself | Starts the worktree-scoped HMR dev stack (daemon under `tsx watch` + vite under HMR, detached in one process group). The cockpit's "Redeploy" chip invokes the same command. |
 
 There is no third command for "deploy without HMR" or "deploy from main vs.
@@ -56,8 +56,8 @@ match where the stack is actually listening.
 ## Worktree isolation: how it works
 
 A worktree dev stack must never accidentally talk to the systemd long-term
-daemon at `:4010`, **and must never share runtime state (DB, tmux sessions,
-ttyds) with the prod daemon**. Six hard isolation points enforce that
+daemon at `:4010`, **and must never share runtime state (DB or tmux sessions)
+with the prod daemon**. Five hard isolation points enforce that
 contract — if any of them regress, the cockpit silently routes to the wrong
 daemon, new backend routes 404, *or* the worktree's orphan-reaper SIGKILLs
 prod's live agent panes (2026-05-27 incident). Audit-friendly file:line
@@ -82,16 +82,8 @@ citations:
 - **Daemon refusal to bind `:4010`** — `apps/daemon/src/index.ts:47-52`. A
   worktree daemon with no `CITADEL_PORT` exits non-zero rather than clobber
   the systemd-reserved port.
-- **ttyd slot disjointness** — `apps/daemon/src/ttyd-slot.ts`. Each daemon
-  computes a per-instance ttyd port slot from `(((daemonPort - 4010) % 11) + 11) % 11`
-  (200 ports wide). The systemd daemon and worktree daemons land in disjoint
-  slots so ttyd ports never collide. NB: ~9% of worktree ports (every 11th
-  in the 4110–4209 range) hash into slot 0 — same as prod. With the
-  per-worktree tmux socket now in place, this is no longer catastrophic
-  (the adopted ttyds would point at sessions on a *different* tmux server),
-  but it still leaks process names — track as a follow-up.
 - **Vite proxy reads `CITADEL_DAEMON_URL`** — `apps/web/vite.config.ts:21-32`.
-  Every proxy target (`/api`, `/events`, `/terminals`, `/terminal`) reads the
+  Every proxy target (`/api`, `/events`, `/terminal`) reads the
   env var. `make deploy` sets it explicitly, so the cockpit always reaches its
   own daemon.
 
@@ -103,9 +95,7 @@ classification:
 
 | File:line | Code | Verdict |
 |---|---|---|
-| `apps/web/vite.config.ts:21,22,25,31` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
-| `apps/daemon/src/ttyd-slot.ts` | ttyd slot math + comment | Intentional. Modular origin for disjoint port slots. Keep. |
-| `apps/daemon/src/app.ts:115` | Comment about cleanupStale skip for `config.port=4010` | Intentional. Documents the production-install slot collision rationale. Keep. |
+| `apps/web/vite.config.ts:21,22,25` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
 | `apps/daemon/src/index.ts:8,49` | Comment + error message | Intentional. Refuses to bind `:4010` from a worktree daemon. Keep. |
 | `packages/config/src/index.ts:76` | `port: …default(4010)` | Intentional. Schema default for the systemd unit. Keep. |
 | `scripts/dev/smoke.ts:1`, `scripts/dev/performance-smoke.ts:8` | `process.env.CITADEL_BASE_URL \|\| "http://127.0.0.1:4010"` | Intentional. Smoke scripts target the systemd daemon by default; overridable via env var. Keep. |
@@ -124,13 +114,13 @@ changed something in the cockpit if the cockpit has nothing to render.
 The seed is a checked-in, fully synthetic fixture (under `seeds/` in this
 repo): a tiny mock git repo and a small set of `INSERT`s. It is intentionally
 **not** sourced from the systemd long-term daemon's data — that would copy
-live `agent_sessions` rows that reference real tmux sessions, and the
+live `workspace_sessions` rows that reference real tmux sessions, and the
 worktree daemon booted on top would race the live daemon for ownership of
 those sessions, breaking the live cockpit.
 
 | Command | What it does |
 |---|---|
-| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with two `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 workspaces (one with a PR snapshot + Jira issue), 10 activity events, and a 3-block scratchpad. Idempotent. Touches **only** safe-to-seed tables — never `agent_sessions`, `background_sessions`, `operations`, or `scheduled_agents`. |
+| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with four `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 freestyle workspaces, 1 structured workspace with 2 checkouts, an approved plan, manager state/events, review/deviation artifacts, closed role-session history, activity events, and a 3-block scratchpad. Idempotent. Touches only safe-to-seed rows — never `background_sessions`, `operations`, or `scheduled_agents`; seeded `workspace_sessions` are closed/disconnected history rows with no tmux ownership. |
 | `make seed-reset` | Stops this worktree's dev stack, removes the SQLite + mock repo + mock worktrees, and re-seeds from scratch. Use for a clean QA baseline. |
 
 `make deploy` auto-runs `make seed` if neither the mock repo nor the SQLite
@@ -147,20 +137,28 @@ make deploy                      # auto-seeds; cockpit has data
 make seed-reset && make deploy   # back to a clean QA baseline
 ```
 
+**Structured QA fixture:**
+
+- `structured-delivery` is a structured workspace root with Home plus two checkout children.
+- `review-ready` has a fresh intended PR, green checks, no conflicts, an approved plan, and a matching review artifact. It should evaluate as ready for human review.
+- `blocked-checks` has a failing intended PR and an open blocking plan deviation. It should stay blocked.
+- The seeded role history includes closed PM, architect, implementation, prototype, and manager sessions. These rows are disconnected history only; launch a new role from the Stage `+` menu to create a live tmux-backed session.
+
 **What's NOT seeded, and why:**
 
-- No `agent_sessions` / `background_sessions` rows — those carry tmux
-  session names that the daemon will try to attach to at boot, and any
+- No live `workspace_sessions` / `background_sessions` rows — live rows carry
+  tmux session names that the daemon will try to attach to at boot, and any
   collision with the systemd long-term daemon's sessions would steal them
-  away from the live cockpit.
+  away from the live cockpit. Closed/disconnected workspace-session history is
+  safe and is seeded for structured-workspace QA.
 - No `operations` rows — they reference in-flight async work that doesn't
   exist after a daemon restart.
 - No scheduled agents — they'd start firing crons against the mock repo.
 
 If you need to QA agent-launch / scheduled-agent / background-session flows,
 trigger them through the seeded cockpit yourself (start an agent on
-`demo-feature`, etc.). That way the rows reference *this* worktree's tmux
-and daemon.
+`structured-delivery` or `demo-feature`, etc.). That way the rows reference
+*this* worktree's tmux and daemon.
 
 ## Typical flows
 
@@ -177,17 +175,25 @@ make stop      # when done
 **I want this checkout to be the long-term daemon on this devbox:**
 
 ```
-make install   # writes/refreshes ~/.config/systemd/user/citadel.service → this checkout
+make install   # latest release, writes/refreshes ~/.config/systemd/user/citadel.service → this checkout
 ```
 
-After `git pull`, `make install` (or `systemctl --user restart
-citadel.service` if you only need a restart and the unit is already current).
+For a development install from `origin/main`, use `make install REF=main`.
+For an exact release, use `make install REF=vX.Y.Z`. `make upgrade` is the same
+idempotent path with clearer operator wording.
 
 **The cockpit's "Redeploy" chip:**
 
 It calls `.citadel/hooks/deploy redeploy` in the target workspace path, which
 runs `make -s deploy`. Same command, same isolation, same HMR. The chip is
 just a convenience trigger for `make deploy` in another worktree.
+
+**The cockpit's "Undeploy" X:**
+
+When `.citadel/hooks/undeploy` is executable, the Local deploys panel shows an
+X next to deployed apps. For Citadel itself, that hook calls `make -s stop`,
+which kills only the worktree-local dev stack recorded in
+`.citadel/logs/daemon.pid`; it does not touch the long-term systemd service.
 
 ## Troubleshooting
 

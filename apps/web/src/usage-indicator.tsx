@@ -1,10 +1,17 @@
 import type { AgentRuntime, GitHubQuotaSummary, RuntimeUsageSummary } from "@citadel/contracts";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleOff, Github } from "lucide-react";
+import { CircleOff, Github, RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 import { categoryKey, formatLocalReset, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
 import { RuntimeMark } from "./runtime-mark.js";
+
+export function usagePillNeedsReload(summary: RuntimeUsageSummary | undefined): boolean {
+  if (!summary) return true;
+  if (summary.status !== "healthy") return true;
+  if (summary.categories.length === 0) return true;
+  return false;
+}
 
 type RuntimeConfigEntry = {
   id: string;
@@ -12,7 +19,7 @@ type RuntimeConfigEntry = {
   topBarCategoryKey?: string;
 };
 
-type ConfigResponse = { config: { runtimes: RuntimeConfigEntry[] } };
+type ConfigResponse = { config: { agentRuntimes: RuntimeConfigEntry[] } };
 
 // Low-contrast usage pill rendered in the cockpit top bar, left of the
 // Settings icon. One pill per runtime where:
@@ -26,7 +33,7 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
     queryKey: ["config"],
     queryFn: () => api<ConfigResponse>("/api/config"),
   });
-  const configRuntimes = configQuery.data?.config.runtimes ?? [];
+  const configRuntimes = configQuery.data?.config.agentRuntimes ?? [];
   const githubQuota = useQuery({
     queryKey: ["github-quota"],
     queryFn: () => api<{ quota: GitHubQuotaSummary }>("/api/integrations/github/quota"),
@@ -109,7 +116,42 @@ function UsagePill(props: {
   topBarKey: string | undefined;
   usage: RuntimeUsageSummary | undefined;
 }) {
-  const state = resolveUsagePillState(props.runtime, props.usage, props.topBarKey);
+  const summary = props.usage;
+  const state = resolveUsagePillState(props.runtime, summary, props.topBarKey);
+  const queryClient = useQueryClient();
+  const refreshMutation = useMutation({
+    mutationFn: () => api(`/api/runtimes/${props.runtime.id}/usage/refresh`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runtime-usage", props.runtime.id] }),
+  });
+  // Reload affordance for missing / errored / empty usage data. Pill keeps
+  // the same chrome (min-width on .cit-usage-pill) so swapping percentage ↔
+  // refresh icon doesn't shift neighboring controls.
+  if (usagePillNeedsReload(summary)) {
+    const tooltip = summary?.reason
+      ? `${props.runtime.displayName}: ${summary.reason} — click to retry`
+      : `${state.tooltip} — click to retry`;
+    return (
+      <button
+        type="button"
+        className={`${usagePillClassName(state.tone)} cit-usage-pill--reload`}
+        title={tooltip}
+        aria-label={tooltip}
+        disabled={refreshMutation.isPending}
+        onClick={() => refreshMutation.mutate()}
+      >
+        <span className="cit-usage-pill-mark" aria-hidden>
+          {state.tone === "unavailable" ? (
+            <CircleOff size={14} />
+          ) : (
+            <RuntimeMark runtimeId={props.runtime.id} size={14} />
+          )}
+        </span>
+        <span className="cit-usage-pill-value">
+          <RefreshCw size={12} aria-hidden />
+        </span>
+      </button>
+    );
+  }
   return (
     <Link to="/settings" className={usagePillClassName(state.tone)} title={state.tooltip} aria-label={state.tooltip}>
       <span className="cit-usage-pill-mark" aria-hidden>
@@ -189,7 +231,10 @@ function buildTooltip(
     return `${displayName}: ${runtime.healthReason ?? `runtime is ${runtime.health}`}`;
   }
   if (!summary) return `${displayName} — loading usage…`;
-  if (summary.status !== "healthy" || summary.categories.length === 0) {
+  // Mirror the reload-pill predicate so the tooltip and the button stay in
+  // lockstep — a future change to one (e.g. treating "degraded" differently)
+  // can't silently desync them.
+  if (usagePillNeedsReload(summary)) {
     return `${displayName}: ${summary.reason ?? "no usage data"}`;
   }
   const selectedKey = selected ? categoryKey(selected) : null;

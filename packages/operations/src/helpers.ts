@@ -26,6 +26,7 @@ export function discoverDefaultBranch(rootPath: string) {
     const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
       cwd: rootPath,
       encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
     })
       .trim()
       .replace("refs/remotes/origin/", "");
@@ -122,6 +123,11 @@ export function isUniqueWorkspaceNameViolation(error: unknown) {
   return /UNIQUE constraint failed: workspaces\.repo_id, workspaces\.name/i.test(error.message);
 }
 
+export function isUniqueWorkspacePathViolation(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /UNIQUE constraint failed: workspaces\.path/i.test(error.message);
+}
+
 export type WorktreeAddResult = { mode: "checkout" | "tracking" | "new-from-base"; startPoint?: string };
 
 // Attach a worktree at workspacePath. existingBranch (when set) is preferred:
@@ -167,6 +173,18 @@ export function remoteBranchExists(cwd: string, remote: string, branch: string) 
   }
 }
 
+export function branchRefExists(cwd: string, remote: string, branch: string) {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return remoteBranchExists(cwd, remote, branch);
+  }
+}
+
 export function workspaceIsDirty(workspacePath: string) {
   if (!fs.existsSync(workspacePath)) return false;
   const output = execFileSync("git", ["status", "--porcelain=v1"], {
@@ -202,6 +220,84 @@ export function workspaceHasUnpushedCommits(workspacePath: string) {
       return false;
     }
   }
+}
+
+// Cap output payload sizes so dirty summaries don't unbounded grow in
+// pathological cases (e.g. a worktree with thousands of untracked files).
+const DIRTY_SUMMARY_FILE_CAP = 50;
+const DIRTY_SUMMARY_COMMIT_CAP = 20;
+
+export type WorkspaceDirtySummary = {
+  files: Array<{ status: string; path: string }>;
+  unpushedCommits: Array<{ sha: string; subject: string }>;
+};
+
+// Companion to workspaceIsDirty: returns the actual change summary so the
+// cockpit can show which files / commits are blocking the drop. We re-run
+// the underlying git invocations (status + log) rather than threading the
+// raw output through workspaceIsDirty so this helper can be called
+// independently from any code path that needs to surface the detail.
+export function workspaceDirtySummary(workspacePath: string): WorkspaceDirtySummary {
+  if (!fs.existsSync(workspacePath)) return { files: [], unpushedCommits: [] };
+
+  const files: WorkspaceDirtySummary["files"] = [];
+  try {
+    const statusOutput = execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: workspacePath,
+      encoding: "utf8",
+      maxBuffer: 512 * 1024,
+    });
+    for (const line of statusOutput.split("\n")) {
+      if (!line) continue;
+      // Porcelain v1 format: 2-char status code, single space, then path.
+      // Renames are `R  src -> dst`; we keep the right-hand side for display.
+      const status = line.slice(0, 2);
+      const rest = line.slice(3);
+      const file = rest.includes(" -> ") ? (rest.split(" -> ")[1] ?? rest) : rest;
+      files.push({ status, path: file });
+      if (files.length >= DIRTY_SUMMARY_FILE_CAP) break;
+    }
+  } catch {
+    // Not a git repo or git unavailable — return empty rather than throwing,
+    // so callers can render a defensive fallback message.
+  }
+
+  const unpushedCommits: WorkspaceDirtySummary["unpushedCommits"] = [];
+  try {
+    // Try the upstream-aware path first. If `@{u}` resolves, list commits
+    // between upstream and HEAD; otherwise fall through to the rev-list
+    // fallback that excludes anything reachable from a remote.
+    let logOutput = "";
+    try {
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+        cwd: workspacePath,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "@{u}..HEAD"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    } catch {
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "HEAD", "--not", "--remotes"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    }
+    for (const line of logOutput.split("\n")) {
+      if (!line) continue;
+      const [sha, ...subjectParts] = line.split(" ");
+      if (!sha) continue;
+      unpushedCommits.push({ sha, subject: subjectParts.join(" ") });
+      if (unpushedCommits.length >= DIRTY_SUMMARY_COMMIT_CAP) break;
+    }
+  } catch {
+    // Same as above — return whatever we've collected so far.
+  }
+
+  return { files, unpushedCommits };
 }
 
 export function withActionHookIds(output: HookOutput, hookId: string): HookOutput {
@@ -294,7 +390,7 @@ export function reconcileStore(
   for (const session of store.listSessions()) {
     if (!session.tmuxSessionName) continue;
     if (["stopped", "failed", "unknown"].includes(session.status)) continue;
-    if (!tmuxSessionExists(session.tmuxSessionName)) {
+    if (!tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
       const workspaceExists = store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
       if (!workspaceExists) {
         store.deleteSession(session.id);
@@ -325,7 +421,7 @@ export function reconcileStore(
     // For background sessions and the legacy raw-spawn path, the pane PID is
     // the command itself; absence of a shell foreground means the command
     // is still running → leave the row alone.
-    const pane = panePidProcess(session.tmuxSessionName);
+    const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
     if (pane === null) {
       // tmux missing → handled by the workspace-membership branch above.
       // We re-checked here just to be paranoid; status-monitor's next tick

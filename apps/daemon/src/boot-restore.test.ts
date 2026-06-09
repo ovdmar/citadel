@@ -10,7 +10,7 @@ import { resetBootRestoreSummaryForTests, runBootRestore } from "./boot-restore.
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 beforeEach(() => {
@@ -219,7 +219,7 @@ describe("runBootRestore", () => {
     const { config, store } = fixture();
     // Wipe runtimes so the lookup fails for our claude-code candidate;
     // the loop should mark it failed and continue.
-    config.runtimes = [];
+    config.agentRuntimes = [];
     insertLiveSession(store, { id: "sess_a", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
     insertLiveSession(store, { id: "sess_b", uuid: "uuid-bbbb", ageMs: 5 * 60_000 });
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
@@ -378,7 +378,7 @@ describe("runBootRestore", () => {
     // list-sessions ...`), but `has-session -t <name>` confirms the pane
     // is still there. Pre-fix, boot-restore flipped the row to "unknown"
     // and the cockpit popped a Restore banner for a session whose tmux +
-    // ttyd were perfectly fine. With the double-check, the row stays in
+    // terminal viewer path was perfectly fine. With the double-check, the row stays in
     // its live status and no restore work happens.
     const { config, store } = fixture();
     const ts = new Date().toISOString();

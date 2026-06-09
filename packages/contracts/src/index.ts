@@ -1,7 +1,30 @@
 import { z } from "zod";
-import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
+import {
+  ExecutionTargetTypeSchema,
+  IssueBindingSchema,
+  LaunchSettingsSchema,
+  RoleIdSchema,
+  RuntimeLaunchOptionCapabilitiesSchema,
+  WorkspaceLifecyclePhaseSchema,
+  WorkspaceModeSchema,
+} from "./agents-system.js";
+import {
+  type CheckSummarySchema,
+  CiRunSummarySchema,
+  type PrReviewerSchema,
+  type PrReviewerStateSchema,
+  PullRequestSummarySchema,
+} from "./pr-summary.js";
 import { IdSchema } from "./primitives.js";
 export { IdSchema } from "./primitives.js";
+export {
+  CheckSummarySchema,
+  CiRunSummarySchema,
+  PrMergeStateStatusSchema,
+  PrReviewerSchema,
+  PrReviewerStateSchema,
+  PullRequestSummarySchema,
+} from "./pr-summary.js";
 
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
@@ -19,6 +42,7 @@ export const AgentSessionStatusSchema = z.enum([
   "unknown",
 ]);
 export const TransportStatusSchema = z.enum(["disconnected", "connecting", "connected", "degraded"]);
+export const TerminalBackendSchema = z.enum(["tmux", "pty-daemon"]);
 export const OperationStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
 
 export const RepoSchema = z.object({
@@ -28,6 +52,8 @@ export const RepoSchema = z.object({
   defaultBranch: z.string().min(1).default("main"),
   defaultRemote: z.string().min(1).default("origin"),
   worktreeParent: z.string().min(1),
+  providerRepositoryKey: z.string().min(1).nullable().optional(),
+  showMainWorkspace: z.boolean().optional(),
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),
@@ -39,13 +65,17 @@ export const RepoSchema = z.object({
 
 export const WorkspaceSchema = z.object({
   id: IdSchema,
-  repoId: IdSchema,
+  repoId: IdSchema.nullable().default(null),
   name: z.string().min(1),
   path: z.string().min(1),
+  rootPath: z.string().min(1).nullable().optional(),
+  mode: WorkspaceModeSchema.optional(),
   branch: z.string().min(1),
   baseBranch: z.string().min(1),
   source: WorkspaceSourceSchema,
   kind: WorkspaceKindSchema.default("worktree"),
+  lifecyclePhase: WorkspaceLifecyclePhaseSchema.optional(),
+  parentIssue: IssueBindingSchema.nullable().optional(),
   prUrl: z.string().nullable().default(null),
   issueKey: z.string().nullable().default(null),
   issueTitle: z.string().nullable().default(null),
@@ -66,6 +96,7 @@ export {
   CreateNamespaceInputSchema,
   NamespaceColorSchema,
   NamespaceSchema,
+  ReorderNamespacesInputSchema,
   UpdateNamespaceInputSchema,
 } from "./namespaces.js";
 
@@ -94,12 +125,48 @@ export const AgentRuntimeSchema = z.object({
   health: ProviderStatusSchema,
   healthReason: z.string().nullable().default(null),
   capabilities: RuntimeCapabilitySchema,
+  launchCapabilities: RuntimeLaunchOptionCapabilitiesSchema.optional(),
 });
 
-export const AgentSessionSchema = z.object({
+export const TerminalProfileSchema = z.object({
+  displayName: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+});
+
+export const SystemPromptSourceSchema = z.enum(["settings_base", "role_template", "caller"]);
+
+const SystemPromptDeliveryBaseSchema = z.object({
+  runtimeId: IdSchema.optional(),
+});
+
+export const SystemPromptDeliverySchema = z.discriminatedUnion("mode", [
+  SystemPromptDeliveryBaseSchema.extend({
+    mode: z.literal("native_argv"),
+  }).strict(),
+  SystemPromptDeliveryBaseSchema.extend({
+    mode: z.literal("pasted_wrapper"),
+    reason: z.enum(["native_unavailable", "argv_too_large"]),
+  }).strict(),
+  z
+    .object({
+      mode: z.literal("none"),
+      reason: z.literal("empty"),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("skipped_resume"),
+      reason: z.literal("resume"),
+    })
+    .strict(),
+]);
+
+const WorkspaceSessionBaseSchema = z.object({
   id: IdSchema,
   workspaceId: IdSchema,
-  runtimeId: IdSchema,
+  targetType: ExecutionTargetTypeSchema.optional(),
+  checkoutId: IdSchema.nullable().optional(),
   displayName: z.string(),
   status: AgentSessionStatusSchema,
   // Status-tracking fields written by the DB layer; optional at the TS level
@@ -117,8 +184,17 @@ export const AgentSessionSchema = z.object({
   endedAt: z.string().nullable().optional(),
   exitCode: z.number().int().nullable().optional(),
   transport: TransportStatusSchema,
+  terminalBackend: TerminalBackendSchema.default("tmux"),
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Tmux socket name that owns this pane. Persisted legacy rows are backfilled
+  // to workspace-specific sockets; null/omitted still means the legacy daemon
+  // socket from CITADEL_TMUX_SOCKET for in-memory/back-compat callers.
+  tmuxSocketName: z.string().nullable().optional(),
+  ptySessionId: z.string().nullable().optional(),
+  ptyOwnerSocket: z.string().nullable().optional(),
+  ptyOwnerPid: z.number().int().nullable().optional(),
+  ptyLastSeenAt: z.string().nullable().optional(),
   // Stable per-tab identifier that survives across restore-spawn-restore
   // cycles. Generated fresh on first session create in a workspace; inherited
   // by every subsequent row that resumes the same conversation (the restored
@@ -132,6 +208,17 @@ export const AgentSessionSchema = z.object({
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
   runtimeSessionId: z.string().nullable().optional(),
+  systemPromptSources: z.array(SystemPromptSourceSchema).nullable().optional(),
+  systemPromptDelivery: SystemPromptDeliverySchema.nullable().optional(),
+  systemPromptLastDelivery: SystemPromptDeliverySchema.nullable().optional(),
+  role: RoleIdSchema.nullable().optional(),
+  actionId: z.string().nullable().optional(),
+  managed: z.boolean().optional(),
+  parentSessionId: IdSchema.nullable().optional(),
+  planVersionId: IdSchema.nullable().optional(),
+  managerActionId: IdSchema.nullable().optional(),
+  closedAt: z.string().nullable().optional(),
+  launchWarnings: z.array(z.string()).optional(),
   // Auto-resume bookkeeping for sessions that hit a global API rate limit.
   // The daemon's auto-resume loop populates these so backoff state survives
   // daemon restarts: `rateLimitResumeAttempts` is the consecutive resume-send
@@ -145,6 +232,18 @@ export const AgentSessionSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const AgentSessionSchema = WorkspaceSessionBaseSchema.extend({
+  kind: z.literal("agent"),
+  runtimeId: IdSchema,
+});
+
+export const TerminalSessionSchema = WorkspaceSessionBaseSchema.extend({
+  kind: z.literal("terminal"),
+  runtimeId: z.null(),
+});
+
+export const WorkspaceSessionSchema = z.discriminatedUnion("kind", [AgentSessionSchema, TerminalSessionSchema]);
+
 export const ProviderHealthSchema = z.object({
   id: IdSchema,
   kind: z.enum(["version-control", "pull-request", "ci", "issue-tracker", "usage", "notification"]),
@@ -152,27 +251,6 @@ export const ProviderHealthSchema = z.object({
   status: ProviderStatusSchema,
   reason: z.string().nullable().default(null),
   checkedAt: z.string(),
-});
-
-export const CheckSummarySchema = z.object({
-  name: z.string(),
-  status: z.string(),
-  conclusion: z.string().nullable(),
-  url: z.string().nullable(),
-  startedAt: z.string().nullable().default(null),
-  completedAt: z.string().nullable().default(null),
-});
-
-export const CiRunSummarySchema = z.object({
-  providerId: z.string(),
-  id: z.string(),
-  name: z.string(),
-  status: z.string(),
-  conclusion: z.string().nullable(),
-  branch: z.string().nullable(),
-  event: z.string().nullable(),
-  url: z.string().nullable(),
-  createdAt: z.string().nullable(),
 });
 
 export const CiProviderSummarySchema = z.object({
@@ -221,46 +299,6 @@ export const GitHubQuotaSummarySchema = z.object({
   resources: z.array(GitHubQuotaResourceSchema).default([]),
 });
 
-export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
-
-export const PrReviewerSchema = z.object({
-  login: z.string().min(1),
-  name: z.string().nullable().default(null),
-  state: PrReviewerStateSchema,
-});
-
-// GitHub's mergeStateStatus enum; affects the workspace-card "conflicting"
-// tone (DIRTY → red border) but not the readiness state itself. Lowercase
-// "mergeable" enum on PullRequestSummarySchema is the source of truth for
-// the pr-conflicts readiness gate.
-export const PrMergeStateStatusSchema = z
-  .enum(["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"])
-  .catch("UNKNOWN");
-
-export const PullRequestSummarySchema = z.object({
-  number: z.number(),
-  title: z.string(),
-  url: z.string(),
-  state: z.string(),
-  draft: z.boolean(),
-  reviewDecision: z.string().nullable(),
-  checks: z.array(CheckSummarySchema),
-  additions: z.number().nullable().default(null),
-  deletions: z.number().nullable().default(null),
-  reviewers: z.array(PrReviewerSchema).default([]),
-  commits: z.array(PrCommitSchema).default([]),
-  headRefName: z.string().nullable().default(null),
-  parentPr: ParentPrSchema.nullable().default(null),
-  mergeable: z.enum(["mergeable", "conflicting", "unknown"]).default("unknown"),
-  allowedMergeStrategies: z.array(PrMergeStrategySchema).default([]),
-  // gh `pr view --json mergeStateStatus` — affects card tone only.
-  mergeStateStatus: PrMergeStateStatusSchema.nullable().default(null),
-  // gh `pr view --json headRefOid` — the PR head commit SHA. Used by the
-  // CI auto-recovery tick to dedupe per-SHA so we don't re-launch agents
-  // on CI re-runs of the same commit.
-  headSha: z.string().nullable().default(null),
-});
-
 export const VersionControlSummarySchema = z.object({
   providerId: z.string(),
   status: ProviderStatusSchema,
@@ -279,34 +317,16 @@ export const VersionControlSummarySchema = z.object({
   cooldownUntil: z.string().nullable().optional(),
 });
 
-export const IssueTransitionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  toStatus: z.string(),
-});
-
-export const IssueTrackerSummarySchema = z.object({
-  providerId: z.string(),
-  status: ProviderStatusSchema,
-  reason: z.string().nullable(),
-  key: z.string(),
-  summary: z.string().nullable(),
-  issueStatus: z.string().nullable(),
-  assignee: z.string().nullable(),
-  updated: z.string().nullable(),
-  url: z.string().nullable(),
-  transitions: z.array(IssueTransitionSchema),
-  checkedAt: z.string(),
-});
-
-export const IssueTransitionActionResultSchema = z.object({
-  providerId: z.string(),
-  status: ProviderStatusSchema,
-  reason: z.string().nullable(),
-  key: z.string(),
-  transition: z.string(),
-  checkedAt: z.string(),
-});
+export {
+  IssueSearchResponseSchema,
+  IssueSearchResultSchema,
+  IssueTrackerSummarySchema,
+  IssueTransitionActionResultSchema,
+  IssueTransitionSchema,
+  JiraAutoTransitionEventSchema,
+  JiraAutoTransitionSchema,
+} from "./jira.js";
+import { IssueTrackerSummarySchema } from "./jira.js";
 
 export const OperationLogEntrySchema = z.object({
   level: z.enum(["info", "warn", "error"]).default("info"),
@@ -346,62 +366,20 @@ export const GitStatusSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
-export const HookLinkSchema = z.object({
-  label: z.string().min(1).max(80),
-  url: z.string().url(),
-  kind: z.enum(["preview", "deploy", "docs", "external"]).default("external"),
-});
-
-export const HookApplicationSchema = z.object({
-  id: IdSchema,
-  label: z.string().min(1).max(80),
-  kind: z.enum(["preview", "deployment", "service", "docs", "external"]).default("service"),
-  url: z.string().url().nullable().default(null),
-  environment: z.string().max(80).nullable().default(null),
-  status: z.enum(["healthy", "degraded", "unavailable", "unknown"]).default("unknown"),
-  version: z.string().max(120).nullable().default(null),
-  commit: z.string().max(80).nullable().default(null),
-  updatedAt: z.string().nullable().default(null),
-  metadata: z.record(z.unknown()).default({}),
-});
-
-export const HookActionSchema = z.object({
-  id: IdSchema,
-  label: z.string().min(1).max(80),
-  description: z.string().max(200).nullable().default(null),
-  url: z.string().url().nullable().default(null),
-  kind: z.enum(["redeploy", "restart", "logs", "open", "custom"]).optional(),
-  safety: z.enum(["safe", "confirm", "destructive"]).optional(),
-  executable: z.boolean().optional(),
-  hookId: z.string().nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
-
-export const HookOutputSchema = z
-  .object({
-    applications: z.array(HookApplicationSchema).max(30).optional(),
-    links: z.array(HookLinkSchema).max(20).default([]),
-    actions: z.array(HookActionSchema).max(20).default([]),
-    metadata: z.record(z.unknown()).default({}),
-  })
-  .default({ links: [], actions: [], metadata: {} });
-
-export const HookDiagnosticSchema = z.object({
-  hookId: z.string(),
-  event: z.string(),
-  command: z.string(),
-  args: z.array(z.string()).default([]),
-  cwd: z.string().nullable().default(null),
-  blocking: z.boolean(),
-  enabled: z.boolean(),
-  validationStatus: z.enum(["valid", "invalid"]),
-  validationErrors: z.array(z.string()).default([]),
-  lastRunAt: z.string().nullable().default(null),
-  durationMs: z.number().int().nullable().default(null),
-  exitStatus: z.number().int().nullable().default(null),
-  outputSummary: z.string().nullable().default(null),
-  structuredPayload: HookOutputSchema.nullable().default(null),
-});
+export {
+  HookActionSchema,
+  HookApplicationSchema,
+  HookDiagnosticSchema,
+  HookLinkSchema,
+  HookOutputSchema,
+} from "./hooks.js";
+import {
+  HookActionSchema,
+  HookApplicationSchema,
+  HookDiagnosticSchema,
+  HookLinkSchema,
+  HookOutputSchema,
+} from "./hooks.js";
 
 export const DeployedAppStatusSchema = z.enum(["deployed", "stopped", "unknown"]);
 
@@ -439,9 +417,20 @@ export const DeployHookResolutionSchema = z.object({
   note: z.string().nullable().default(null),
 });
 
+export const UndeployHookSourceSchema = z.enum(["repo-file", "none"]);
+
+export const UndeployHookResolutionSchema = z.object({
+  source: UndeployHookSourceSchema,
+  filePath: z.string().nullable().default(null),
+  // Diagnostic breadcrumb when resolution had to skip a candidate, e.g.
+  // "<path> exists but is not executable".
+  note: z.string().nullable().default(null),
+});
+
 export const DeployedAppsSummarySchema = z.object({
   workspaceId: IdSchema,
   resolution: DeployHookResolutionSchema,
+  undeployResolution: UndeployHookResolutionSchema.default({ source: "none", filePath: null, note: null }),
   apps: z.array(DeployedAppSchema),
   error: z.string().nullable().default(null),
   checkedAt: z.string(),
@@ -522,8 +511,12 @@ export const CreateRepoInputSchema = z.object({
 });
 
 export const CreateWorkspaceInputSchema = z.object({
-  repoId: IdSchema,
-  name: z.string().min(1),
+  repoId: IdSchema.optional(),
+  // Empty `name` lets the daemon generate a memorable unique name.
+  name: z.string().default(""),
+  mode: WorkspaceModeSchema.optional(),
+  rootPath: z.string().min(1).optional(),
+  parentIssue: IssueBindingSchema.optional(),
   source: WorkspaceSourceSchema.default("scratch"),
   issueKey: z.string().min(2).optional(),
   issueTitle: z.string().min(1).optional(),
@@ -536,22 +529,46 @@ export const CreateWorkspaceInputSchema = z.object({
   namespaceId: IdSchema.optional(),
 });
 
-export const CreateAgentSessionInputSchema = z.object({
+export const CreateAgentSessionInputSchema = z
+  .object({
+    workspaceId: IdSchema,
+    targetType: ExecutionTargetTypeSchema.optional(),
+    checkoutId: IdSchema.optional(),
+    runtimeId: IdSchema,
+    displayName: z.string().min(1).optional(),
+    prompt: z.string().optional(),
+    systemPrompt: z.string().optional(),
+    role: RoleIdSchema.optional(),
+    actionId: z.string().optional(),
+    managed: z.boolean().optional(),
+    parentSessionId: IdSchema.optional(),
+    planVersionId: IdSchema.optional(),
+    managerActionId: IdSchema.optional(),
+    launchSettings: LaunchSettingsSchema.optional(),
+    namespaceId: IdSchema.optional(),
+    // operationId lets hook-dispatched sessions link their activity back to the
+    // firing operation. Always optional — user-launched sessions don't have a
+    // parent operation, and existing callers must keep working unchanged.
+    operationId: z.string().optional(),
+    // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
+    // instead of generating a fresh UUID via `--session-id`. The runtime
+    // session's transcript on disk must exist; the caller is responsible for
+    // validating that (see the Settings restore flow / backfill).
+    resumeRuntimeSessionId: z.string().uuid().optional(),
+    // When set, the new session is bound to an existing tab slot (instead of
+    // generating a fresh tabId). Restore paths pass the source row's tabId so
+    // the restored session reuses the original tab position in the cockpit's
+    // tab strip. Non-restore callers leave this unset and get a fresh tabId.
+    tabId: z.string().optional(),
+  })
+  .strict();
+
+export const CreateTerminalSessionInputSchema = z.object({
   workspaceId: IdSchema,
-  runtimeId: IdSchema,
+  targetType: ExecutionTargetTypeSchema.optional(),
+  checkoutId: IdSchema.optional(),
   displayName: z.string().min(1).optional(),
-  prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
-  // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
-  // instead of generating a fresh UUID via `--session-id`. The runtime
-  // session's transcript on disk must exist; the caller is responsible for
-  // validating that (see the Settings restore flow / backfill).
-  resumeRuntimeSessionId: z.string().uuid().optional(),
-  // When set, the new session is bound to an existing tab slot (instead of
-  // generating a fresh tabId). Restore paths pass the source row's tabId so
-  // the restored session reuses the original tab position in the cockpit's
-  // tab strip. Non-restore callers leave this unset and get a fresh tabId.
-  tabId: z.string().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -563,6 +580,7 @@ export const LaunchAgentInputSchema = z
     repoId: IdSchema.optional(),
     repoName: z.string().min(1).optional(),
     prompt: z.string().min(1),
+    systemPrompt: z.string().optional(),
     runtimeId: IdSchema.default("claude-code"),
     displayName: z.string().min(1).max(80).optional(),
     workspaceName: z.string().min(1).max(80).optional(),
@@ -624,9 +642,14 @@ export const WorkspaceRecentCommitsSchema = z.object({
 
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
+export type WorkspaceSession = z.infer<typeof WorkspaceSessionSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
+export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
 export type AgentPrompt = z.infer<typeof AgentPromptSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
+export type SystemPromptSource = z.infer<typeof SystemPromptSourceSchema>;
+export type SystemPromptDelivery = z.infer<typeof SystemPromptDeliverySchema>;
+export type TerminalProfile = z.infer<typeof TerminalProfileSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
 export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
@@ -639,9 +662,15 @@ export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
-export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
-export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
-export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
+export type {
+  IssueSearchResponse,
+  IssueSearchResult,
+  IssueTrackerSummary,
+  IssueTransition,
+  IssueTransitionActionResult,
+  JiraAutoTransition,
+  JiraAutoTransitionEvent,
+} from "./jira.js";
 export type Operation = z.infer<typeof OperationSchema>;
 export type OperationLogEntry = z.infer<typeof OperationLogEntrySchema>;
 export type GitStatusSummary = z.infer<typeof GitStatusSummarySchema>;
@@ -658,18 +687,23 @@ export type DeployedAppStatus = z.infer<typeof DeployedAppStatusSchema>;
 export type DeployHookListOutput = z.infer<typeof DeployHookListOutputSchema>;
 export type DeployHookResolution = z.infer<typeof DeployHookResolutionSchema>;
 export type DeployHookSource = z.infer<typeof DeployHookSourceSchema>;
+export type UndeployHookResolution = z.infer<typeof UndeployHookResolutionSchema>;
+export type UndeployHookSource = z.infer<typeof UndeployHookSourceSchema>;
 export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
+export type { WorkspaceDirtySummary } from "./workspace-dirty.js";
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type CreateTerminalSessionInput = z.infer<typeof CreateTerminalSessionInputSchema>;
 export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type {
   AssignWorkspaceToNamespaceInput,
   CreateNamespaceInput,
   Namespace,
+  ReorderNamespacesInput,
   UpdateNamespaceInput,
 } from "./namespaces.js";
 export type DiffFile = z.infer<typeof DiffFileSchema>;
@@ -680,7 +714,16 @@ export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
+export { HookEventSchema, AgentHookFrontmatterSchema } from "./hooks.js";
+export type { HookEvent, AgentHookFrontmatter } from "./hooks.js";
 export * from "./citadel-actions.js";
-
+export * from "./teardown.js";
+export * from "./shortcuts.js";
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
+export * from "./system-health.js";
+export { WorkspacePrStateEntrySchema, WorkspacesPrStateResponseSchema } from "./workspaces-pr-state.js";
+export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";
+export * from "./agents-system.js";
+export * from "./manager-orchestration.js";
+export * from "./internal-review.js";

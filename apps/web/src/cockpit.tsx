@@ -1,37 +1,94 @@
-import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PullRequestSummary, Workspace, WorkspaceSession } from "@citadel/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ChevronsLeft, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
-import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
+import { BottomBar } from "./cockpit-bottom-bar.js";
+import { CollapsedLeftRail } from "./cockpit-rails.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
+import {
+  checkoutIdFromTargetKey,
+  sessionMatchesTarget,
+  shouldShowInspectorPanel,
+  targetKeyForSession,
+  targetLabel,
+} from "./cockpit-session-targets.js";
+import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import {
   invalidateActiveWorkspaceFromBatch,
   prMapFromSummaries,
   useAllWorkspacesPrSummary,
   useStickyWorkspaceSummaries,
   useWorkspaceCockpitSummary,
+  useWorkspacesPrState,
 } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
+import { checkoutPrRefreshIdentity, useCheckoutPrOpenRefresh } from "./hooks/use-checkout-pr-open-refresh.js";
+import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
+import { resolveInspectorTargetState } from "./inspector-target-state.js";
 import { Inspector } from "./inspector.js";
+import {
+  expandGroupPath,
+  readNavigatorGrouping,
+  subscribeToCollapseChanges,
+  subscribeToGroupingChanges,
+} from "./navigator-collapse-store.js";
+import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
+import { checkoutPrStateMap } from "./navigator-pr-state.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
+import { useSessionAttentionAcknowledgement } from "./session-attention-ack.js";
+import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
+import {
+  focusActiveTerminal,
+  isRegisteredTerminalMessageSource,
+  setDefaultVoiceTerminalSession,
+} from "./terminal-pane.js";
+import { parseRegisteredTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
+import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
+import { visibleNavigatorWorkspaces } from "./workspace-visibility.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
-const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
+const STORAGE_TARGET_BY_WORKSPACE = "citadel.target-by-workspace";
+const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
 
 type MobileView = "navigator" | "stage" | "inspector";
 
+function focusTerminalSoon(sessionId: string) {
+  for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
+    window.setTimeout(() => focusActiveTerminal(sessionId), delay);
+  }
+}
+
+function homeReviewCheckoutId(
+  workspace: Workspace | null,
+  checkouts: Array<{
+    id: string;
+    repoId: string;
+    path: string;
+  }>,
+): string | null {
+  if (!workspace) return null;
+  const exact = checkouts.find((checkout) => checkout.path === workspace.path && checkout.repoId === workspace.repoId);
+  if (exact) return exact.id;
+  return checkouts.length === 1 ? (checkouts[0]?.id ?? null) : null;
+}
+
 export function Cockpit() {
-  const state = useStateQuery();
+  // Use the filtered variant so workspaces in the optimistic-remove
+  // blacklist (AC4) are subtracted from `data.workspaces` for every
+  // consumer of `state.data` below — including the active-workspace
+  // selector at L52, which must never pick a blacklisted workspace as
+  // the fallback active row.
+  const state = useFilteredStateQuery();
   useEventRefresh();
   const data = state.data;
   const queryClient = useQueryClient();
@@ -41,68 +98,290 @@ export function Cockpit() {
 
   const layout = useCockpitLayout();
   const [activeWorkspaceId, setActiveWorkspaceId] = useLocalStorage(STORAGE_LAST_WORKSPACE, "");
-  const [lastRepoId, setLastRepoId] = useLocalStorage(STORAGE_LAST_REPO, "");
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useLocalStorageRecord(STORAGE_SESSION_BY_WORKSPACE);
+  const [activeTargetByWorkspace, setActiveTargetByWorkspace] = useLocalStorageRecord(STORAGE_TARGET_BY_WORKSPACE);
   const [commandOpen, setCommandOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("stage");
+  const navigatorWorkspaces = useMemo(
+    () => visibleNavigatorWorkspaces(data?.workspaces ?? [], data?.repos ?? []),
+    [data?.workspaces, data?.repos],
+  );
 
   // Re-route search-param-driven workspace selection (used from dashboard/history)
   useEffect(() => {
     if (search.workspace) {
       setActiveWorkspaceId(search.workspace);
+      setActiveTargetByWorkspace((current) => ({ ...current, [search.workspace as string]: "home" }));
       navigate({ to: location.pathname, search: {} as Record<string, string> });
     }
-  }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId]);
+  }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId, setActiveTargetByWorkspace]);
 
   const activeWorkspace = useMemo<Workspace | null>(() => {
-    if (!data?.workspaces.length) return null;
+    if (!navigatorWorkspaces.length) return null;
     return (
-      data.workspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
-      [...data.workspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
+      navigatorWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
+      [...navigatorWorkspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
       null
     );
-  }, [activeWorkspaceId, data?.workspaces]);
+  }, [activeWorkspaceId, navigatorWorkspaces]);
   useEffect(() => {
     if (activeWorkspace && activeWorkspace.id !== activeWorkspaceId) setActiveWorkspaceId(activeWorkspace.id);
-    if (activeWorkspace && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
-  }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
+  }, [activeWorkspace, activeWorkspaceId, setActiveWorkspaceId]);
 
-  // Order matters: the batch poll + sticky cache must run before the single-
-  // workspace fetch so we can hand the cached summary to React Query as
-  // `placeholderData`. That makes the inspector render the last-known PR
-  // state instantly on workspace switch (otherwise the 10s `gh pr view`
-  // round-trip leaves the PR section blank for several seconds).
-  const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
-  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const batchPrSummary = useAllWorkspacesPrSummary(navigatorWorkspaces);
+  const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
+    navigatorWorkspaces,
+    batchPrSummary.data,
+  );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
+  const prStateQuery = useWorkspacesPrState();
+  useEffect(() => {
+    if (cockpitSummary.data) rememberSummary(cockpitSummary.data);
+  }, [cockpitSummary.data, rememberSummary]);
   useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
-  // Feed the active workspace result back into the sticky cache by recomputing
-  // the PR map from both sources. The active query is preferred for the
-  // selected workspace; the batch covers everyone else.
+  const focusConfig = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<{ config: { providerRefresh?: { focusRefreshThresholdMs?: number } } }>("/api/config"),
+  });
+  const focusThresholdMs = focusConfig.data?.config?.providerRefresh?.focusRefreshThresholdMs ?? 30_000;
+  useFocusRefresh({
+    workspaceId: activeWorkspace?.id ?? null,
+    thresholdMs: focusThresholdMs,
+    queryClient,
+  });
   const prByWorkspaceId = useMemo(() => {
-    const map = prMapFromSummaries(stickySummaries);
-    if (cockpitSummary.data) {
+    const map = new Map<string, PullRequestSummary | null>();
+    for (const [workspaceId, entry] of Object.entries(prStateQuery.data?.workspacePrState ?? {})) {
+      map.set(workspaceId, entry.pullRequest ?? null);
+    }
+    for (const [workspaceId, pullRequest] of prMapFromSummaries(stickySummaries)) {
+      map.set(workspaceId, pullRequest);
+    }
+    if (cockpitSummary.data?.versionControl.status === "healthy") {
       map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
     }
     return map;
-  }, [stickySummaries, cockpitSummary.data]);
-  const selectedRepo = activeWorkspace
+  }, [prStateQuery.data, stickySummaries, cockpitSummary.data]);
+  const checkoutPrByWorkspaceId = useMemo(
+    () => checkoutPrStateMap(prStateQuery.data?.checkoutPrState),
+    [prStateQuery.data?.checkoutPrState],
+  );
+  const selectedRepo = activeWorkspace?.repoId
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
   const allSessions = data?.sessions ?? [];
-  const activeWorkspaceSessions = activeWorkspace
+  const allCheckouts = data?.checkouts ?? [];
+  const activeWorkspaceCheckouts = activeWorkspace
+    ? allCheckouts.filter((checkout) => checkout.workspaceId === activeWorkspace.id && !checkout.archivedAt)
+    : [];
+  const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
+  const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
+  const activeCheckout = activeCheckoutId
+    ? (activeWorkspaceCheckouts.find((checkout) => checkout.id === activeCheckoutId) ?? null)
+    : null;
+  const activeCheckoutPrIdentity = checkoutPrRefreshIdentity(activeCheckout);
+  useCheckoutPrOpenRefresh({
+    workspaceId: activeWorkspace?.id,
+    checkoutId: activeCheckoutId,
+    prIdentityKey: activeCheckoutPrIdentity,
+    queryClient,
+  });
+  const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
+  const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
+  const workspacePrEntry = activeWorkspace ? prStateQuery.data?.workspacePrState?.[activeWorkspace.id] : undefined;
+  const workspacePullRequest = activeWorkspace ? (prByWorkspaceId.get(activeWorkspace.id) ?? null) : null;
+  const workspacePrCheckedAt =
+    activeWorkspace && cockpitSummary.data?.workspaceId === activeWorkspace.id
+      ? cockpitSummary.data.versionControl.checkedAt
+      : (workspacePrEntry?.checkedAt ?? workspacePrEntry?.cachedAt ?? undefined);
+  const inspectorTarget = activeWorkspace
+    ? resolveInspectorTargetState({
+        workspace: activeWorkspace,
+        repos: data?.repos ?? [],
+        checkouts: activeWorkspaceCheckouts,
+        activeCheckoutId,
+        workspacePullRequest,
+        workspaceCheckedAt: workspacePrCheckedAt,
+        checkoutPrState: checkoutPrByWorkspaceId.get(activeWorkspace.id),
+      })
+    : null;
+  const showInspectorPanel = shouldShowInspectorPanel(activeWorkspace, activeTargetType);
+  const activeWorkspaceAllSessions = activeWorkspace
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
-  const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
+  const activeWorkspaceSessions = activeWorkspace
+    ? activeWorkspaceAllSessions.filter(
+        (session) =>
+          !session.closedAt && sessionMatchesTarget(session, activeWorkspace, activeTargetType, activeCheckoutId),
+      )
+    : [];
+  const activeSessionStorageKey = activeWorkspace ? `${activeWorkspace.id}:${activeTargetKey}` : "";
+  const activeSessionId = activeWorkspace ? (activeSessionByWorkspace[activeSessionStorageKey] ?? "") : "";
   const activeSession = activeSessionId
     ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
     : (activeWorkspaceSessions[0] ?? null);
+  const { acknowledgeSessionAttention, unseenAttentionSessionIds } = useSessionAttentionAcknowledgement(
+    allSessions,
+    activeSession,
+  );
+  useEffect(() => {
+    setDefaultVoiceTerminalSession(activeSession?.id ?? null);
+    return () => setDefaultVoiceTerminalSession(null);
+  }, [activeSession?.id]);
+  useEffect(() => {
+    if (!showInspectorPanel && mobileView === "inspector") setMobileView("stage");
+  }, [showInspectorPanel, mobileView]);
+
+  const [navigatorGrouping, setNavigatorGrouping] = useState(() => readNavigatorGrouping());
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const refresh = () => setNavigatorGrouping(readNavigatorGrouping());
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "citadel.navigator-group") refresh();
+    };
+    window.addEventListener("storage", onStorage);
+    const unsubscribeGrouping = subscribeToGroupingChanges(refresh);
+    const unsubscribeCollapse = subscribeToCollapseChanges(refresh);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      unsubscribeGrouping();
+      unsubscribeCollapse();
+    };
+  }, []);
+
+  const navTree = useMemo(() => {
+    if (!data) return [];
+    const levels = treeGroupingFor(navigatorGrouping);
+    if (!levels.length) return [];
+    return buildGroupTree(
+      navigatorWorkspaces,
+      data.repos,
+      data.sessions,
+      data.operations,
+      levels,
+      data.namespaces,
+      data.checkouts,
+    );
+  }, [data, navigatorGrouping, navigatorWorkspaces]);
+  const flatWorkspaceIds = useMemo(() => {
+    if (navTree.length) return flattenWorkspaceOrder(navTree);
+    return navigatorWorkspaces.map((workspace) => workspace.id);
+  }, [navTree, navigatorWorkspaces]);
+
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const spawnSession = useMutation({
+    mutationFn: (input: { workspaceId: string; runtimeId: string; displayName: string }) =>
+      api<{ session: WorkspaceSession }>("/api/agent-sessions", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      setActiveSessionByWorkspace((current) => ({
+        ...current,
+        [`${session.workspaceId}:${targetKeyForSession(session)}`]: session.id,
+      }));
+      setMobileView("stage");
+    },
+    onError: (error) => {
+      setShortcutError(error instanceof Error ? error.message : "Failed to start session");
+    },
+  });
+  const spawnTerminalSession = useMutation({
+    mutationFn: (input: { workspaceId: string; displayName: string }) =>
+      api<{ session: WorkspaceSession }>(`/api/workspaces/${input.workspaceId}/terminal-sessions`, {
+        method: "POST",
+        body: JSON.stringify({ displayName: input.displayName }),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      setActiveSessionByWorkspace((current) => ({
+        ...current,
+        [`${session.workspaceId}:${targetKeyForSession(session)}`]: session.id,
+      }));
+      setMobileView("stage");
+    },
+    onError: (error) => {
+      setShortcutError(error instanceof Error ? error.message : "Failed to start terminal");
+    },
+  });
 
   useEffect(() => {
+    if (!shortcutError) return;
+    const timer = setTimeout(() => setShortcutError(null), 4000);
+    return () => clearTimeout(timer);
+  }, [shortcutError]);
+
+  const handlerStateRef = useRef({
+    flatWorkspaceIds,
+    activeWorkspace,
+    activeWorkspaceSessions,
+    runtimes: data?.agentRuntimes ?? [],
+    navTree,
+  });
+  handlerStateRef.current = {
+    flatWorkspaceIds,
+    activeWorkspace,
+    activeWorkspaceSessions,
+    runtimes: data?.agentRuntimes ?? [],
+    navTree,
+  };
+
+  useEffect(() => {
+    const openCreateWorkspace = () => setCreateWorkspaceOpen(true);
+    const applyShortcutMatch = (match: ShortcutMatch, preventDefault?: () => void) => {
+      const state = handlerStateRef.current;
+      const action = resolveShortcutAction(match, state);
+
+      switch (action.type) {
+        case "toggle-command-palette":
+          preventDefault?.();
+          setCommandOpen((open) => !open);
+          return;
+        case "close-command-palette":
+          setCommandOpen(false);
+          return;
+        case "nav-workspace":
+          preventDefault?.();
+          if (action.expandGroupPath) expandGroupPath(action.expandGroupPath);
+          setActiveWorkspaceId(action.workspaceId);
+          setActiveTargetByWorkspace((current) => ({ ...current, [action.workspaceId]: "home" }));
+          setMobileView("stage");
+          return;
+        case "nav-session": {
+          preventDefault?.();
+          const targetKey = activeTargetByWorkspace[action.workspaceId] ?? "home";
+          setActiveSessionByWorkspace((current) => ({
+            ...current,
+            [`${action.workspaceId}:${targetKey}`]: action.sessionId,
+          }));
+          setMobileView("stage");
+          return;
+        }
+        case "spawn-terminal":
+          preventDefault?.();
+          spawnTerminalSession.mutate({ workspaceId: action.workspaceId, displayName: "Terminal" });
+          return;
+        case "spawn-agent":
+          preventDefault?.();
+          spawnSession.mutate({
+            workspaceId: action.workspaceId,
+            runtimeId: action.runtimeId,
+            displayName: action.displayName,
+          });
+          return;
+        case "spawn-agent-no-runtime":
+          preventDefault?.();
+          setShortcutError("No agent runtime available — install Claude Code or another runtime in Settings.");
+          return;
+        case "noop":
+          return;
+      }
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inEditable =
@@ -110,27 +389,13 @@ export function Cockpit() {
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
         target?.tagName === "SELECT";
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+
+      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setCommandOpen((open) => !open);
-      } else if (
-        // Ctrl+N opens the new-workspace modal. This works on macOS, where
-        // Ctrl+N is unbound by browsers. On Windows/Linux every major browser
-        // (Chrome, Edge, Firefox) binds Ctrl+N to "open new browser window"
-        // and ignores preventDefault, so the binding is effectively macOS-
-        // only. The plain `c` shortcut below remains as the cross-platform
-        // fallback. Cmd+N is reserved by browsers everywhere.
-        event.ctrlKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "n"
-      ) {
-        event.preventDefault();
-        setCreateWorkspaceOpen(true);
-      } else if (
-        // GitHub-style: plain `c` ("create") also opens the new-workspace
-        // modal. Skipped while editing so it doesn't hijack typing.
+        openCreateWorkspace();
+        return;
+      }
+      if (
         !inEditable &&
         !event.metaKey &&
         !event.ctrlKey &&
@@ -139,18 +404,66 @@ export function Cockpit() {
         event.key.toLowerCase() === "c"
       ) {
         event.preventDefault();
-        setCreateWorkspaceOpen(true);
-      } else if (event.key === "Escape") {
-        setCommandOpen(false);
+        openCreateWorkspace();
+        return;
       }
+
+      const match = matchShortcut(event);
+      if (!match) return;
+      applyShortcutMatch(match, () => event.preventDefault());
+    };
+    const onMessage = (event: MessageEvent) => {
+      const message = parseRegisteredTerminalShortcutMessage(event, isRegisteredTerminalMessageSource);
+      if (!message) return;
+      if (message.action === "new-workspace") {
+        openCreateWorkspace();
+        return;
+      }
+      const match = terminalShortcutMatch(message);
+      if (!match) return;
+      applyShortcutMatch(match);
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [
+    activeTargetByWorkspace,
+    setActiveSessionByWorkspace,
+    setActiveTargetByWorkspace,
+    setActiveWorkspaceId,
+    spawnSession,
+    spawnTerminalSession,
+  ]);
 
-  const focusWorkspace = (workspace: Workspace) => {
-    setActiveWorkspaceId(workspace.id);
+  const focusWorkspaceTarget = (workspaceId: string, targetKey: string) => {
+    setActiveWorkspaceId(workspaceId);
+    setActiveTargetByWorkspace((current) => ({ ...current, [workspaceId]: targetKey }));
     setMobileView("stage");
+    const workspace = data?.workspaces.find((entry) => entry.id === workspaceId);
+    const checkouts = allCheckouts.filter((checkout) => checkout.workspaceId === workspaceId && !checkout.archivedAt);
+    const checkoutId = checkoutIdFromTargetKey(targetKey, checkouts);
+    const targetType = checkoutId ? "worktree_checkout" : "workspace_home";
+    const targetSessionId =
+      activeSessionByWorkspace[`${workspaceId}:${targetKey}`] ??
+      allSessions.find(
+        (session) =>
+          workspace &&
+          session.workspaceId === workspaceId &&
+          !session.closedAt &&
+          sessionMatchesTarget(session, workspace, targetType, checkoutId),
+      )?.id;
+    if (targetSessionId) {
+      focusTerminalSoon(targetSessionId);
+    }
+  };
+  const focusWorkspace = (workspace: Workspace) => {
+    focusWorkspaceTarget(workspace.id, "home");
+  };
+  const focusWorkspaceId = (workspaceId: string) => {
+    focusWorkspaceTarget(workspaceId, "home");
   };
 
   const repoNames = useMemo(() => {
@@ -162,14 +475,10 @@ export function Cockpit() {
   const workspaceMeta = useMemo(() => {
     const map: Record<string, { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string }> =
       {};
-    for (const workspace of data?.workspaces ?? []) {
+    for (const workspace of navigatorWorkspaces) {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
       const attention = readinessForWorkspace(workspace, { sessions, operations });
-      // Active workspace gets the richer single-workspace summary (10s poll);
-      // every other workspace gets its PR from the 30s batch poll. Falls back
-      // to the batch map for the active workspace too while the inspector
-      // summary is still loading.
       const pr =
         workspace.id === cockpitSummary.data?.workspaceId
           ? (cockpitSummary.data.versionControl.pullRequest ?? null)
@@ -183,7 +492,7 @@ export function Cockpit() {
       map[workspace.id] = entry;
     }
     return map;
-  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
+  }, [navigatorWorkspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
 
   if (state.isLoading && !data)
     return (
@@ -198,14 +507,19 @@ export function Cockpit() {
         onSearch={() => setCommandOpen(true)}
         activeWorkspace={activeWorkspace}
         repo={selectedRepo}
-        runtimes={data?.runtimes ?? []}
+        runtimes={data?.agentRuntimes ?? []}
       />
       <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
+      {shortcutError ? (
+        <div className="cockpit-shortcut-error" role="alert" aria-live="polite">
+          {shortcutError}
+        </div>
+      ) : null}
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
-          layout.state.rightCollapsed ? "right-collapsed" : ""
-        }`}
+          showInspectorPanel && layout.state.rightCollapsed ? "right-collapsed" : ""
+        } ${showInspectorPanel ? "" : "right-hidden"}`}
         style={
           {
             "--col-left": `${layout.state.leftWidth}px`,
@@ -214,7 +528,10 @@ export function Cockpit() {
         }
       >
         <nav className="mobile-switcher" aria-label="Workspace layout">
-          {(["navigator", "stage", "inspector"] as MobileView[]).map((view) => (
+          {(showInspectorPanel
+            ? (["navigator", "stage", "inspector"] as MobileView[])
+            : (["navigator", "stage"] as MobileView[])
+          ).map((view) => (
             <button
               key={view}
               type="button"
@@ -227,9 +544,10 @@ export function Cockpit() {
         </nav>
         {layout.state.leftCollapsed ? (
           <CollapsedLeftRail
-            workspaces={data?.workspaces ?? []}
+            workspaces={navigatorWorkspaces}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             sessions={data?.sessions ?? []}
+            unseenAttentionSessionIds={unseenAttentionSessionIds}
             onExpand={layout.toggleLeft}
             onPickWorkspace={focusWorkspace}
           />
@@ -240,19 +558,24 @@ export function Cockpit() {
           >
             <Navigator
               repos={data?.repos ?? []}
-              workspaces={data?.workspaces ?? []}
+              workspaces={navigatorWorkspaces}
+              checkouts={allCheckouts}
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
               prByWorkspaceId={prByWorkspaceId}
+              checkoutPrByWorkspaceId={checkoutPrByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
-              runtimes={data?.runtimes ?? []}
+              activeTargetKey={activeTargetKey}
+              runtimes={data?.agentRuntimes ?? []}
               namespaces={data?.namespaces ?? []}
-              lastRepoId={lastRepoId || undefined}
+              unseenAttentionSessionIds={unseenAttentionSessionIds}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
+              onPickWorkspaceId={focusWorkspaceId}
+              onPickTarget={focusWorkspaceTarget}
             />
           </aside>
         )}
@@ -270,61 +593,79 @@ export function Cockpit() {
             <Stage
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
-              allSessions={allSessions}
-              runtimes={data?.runtimes ?? []}
+              allSessions={activeWorkspaceAllSessions}
+              targetKey={activeTargetKey}
+              targetType={activeTargetType}
+              checkoutId={activeCheckoutId}
+              targetLabel={targetLabel(activeTargetType, activeCheckoutId, activeWorkspaceCheckouts)}
+              runtimes={data?.agentRuntimes ?? []}
+              terminal={data?.terminal ?? { displayName: "Terminal", command: "bash", args: ["-l"] }}
               activeSessionId={activeSessionId}
-              onActiveSession={(sessionId) =>
-                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }))
-              }
+              unseenAttentionSessionIds={unseenAttentionSessionIds}
+              onActiveSession={(sessionId) => {
+                setActiveSessionByWorkspace((current) => ({ ...current, [activeSessionStorageKey]: sessionId }));
+                acknowledgeSessionAttention(activeWorkspaceSessions.find((session) => session.id === sessionId));
+                focusTerminalSoon(sessionId);
+              }}
             />
           ) : (
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />
           )}
         </main>
-        <div
-          className="col-divider"
-          onMouseDown={startColumnDrag({
-            side: "right",
-            initial: layout.state.rightWidth,
-            onChange: layout.setRightWidth,
-          })}
-          aria-hidden
-        />
-        {layout.state.rightCollapsed ? (
-          <div className="collapsed-rail col-right">
-            <button
-              type="button"
-              className="collapse-toggle"
-              onClick={layout.toggleRight}
-              aria-label="Expand inspector"
-              title="Expand inspector"
-            >
-              <ChevronsLeft size={14} />
-            </button>
-          </div>
-        ) : (
-          <aside
-            className={`column col-right ${mobileView === "inspector" ? "" : "mobile-hidden"}`}
-            aria-label="Inspector"
-          >
-            {activeWorkspace ? (
-              <Inspector
-                workspace={activeWorkspace}
-                repo={selectedRepo}
-                sessions={activeWorkspaceSessions}
-                summary={cockpitSummary.data}
-                onCollapse={layout.toggleRight}
-              />
+        {showInspectorPanel ? (
+          <>
+            <div
+              className="col-divider"
+              onMouseDown={startColumnDrag({
+                side: "right",
+                initial: layout.state.rightWidth,
+                onChange: layout.setRightWidth,
+              })}
+              aria-hidden
+            />
+            {layout.state.rightCollapsed ? (
+              <div className="collapsed-rail col-right">
+                <button
+                  type="button"
+                  className="collapse-toggle"
+                  onClick={layout.toggleRight}
+                  aria-label="Expand inspector"
+                  title="Expand inspector"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+              </div>
             ) : (
-              <EmptyInspector onCollapse={layout.toggleRight} />
+              <aside
+                className={`column col-right ${mobileView === "inspector" ? "" : "mobile-hidden"}`}
+                aria-label="Inspector"
+              >
+                {activeWorkspace ? (
+                  <Inspector
+                    workspace={activeWorkspace}
+                    repo={inspectorTarget?.repo ?? selectedRepo}
+                    sessions={activeWorkspaceSessions}
+                    summary={cockpitSummary.data}
+                    reviewCheckoutId={reviewCheckoutId}
+                    targetCheckoutId={activeCheckoutId}
+                    targetPullRequest={inspectorTarget?.pullRequest ?? null}
+                    targetPullRequestCheckedAt={inspectorTarget?.checkedAt}
+                    targetBranch={inspectorTarget?.branch ?? activeWorkspace.branch}
+                    targetBaseBranch={inspectorTarget?.baseBranch ?? activeWorkspace.baseBranch}
+                    onCollapse={layout.toggleRight}
+                  />
+                ) : (
+                  <EmptyInspector onCollapse={layout.toggleRight} />
+                )}
+              </aside>
             )}
-          </aside>
-        )}
+          </>
+        ) : null}
       </div>
-      <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
+      <BottomBar activeSession={activeSession} sessions={activeWorkspaceAllSessions} />
       {commandOpen ? (
         <CommandPalette
-          workspaces={data?.workspaces ?? []}
+          workspaces={navigatorWorkspaces}
           repoNames={repoNames}
           workspaceMeta={workspaceMeta}
           onClose={() => setCommandOpen(false)}
@@ -339,72 +680,6 @@ export function Cockpit() {
         />
       ) : null}
     </div>
-  );
-}
-
-function CollapsedLeftRail(props: {
-  workspaces: Workspace[];
-  activeWorkspaceId: string;
-  sessions: import("@citadel/contracts").AgentSession[];
-  onExpand: () => void;
-  onPickWorkspace: (workspace: Workspace) => void;
-}) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  // Show up to 8 most-recent workspaces in the rail; rest accessible via Cmd+K
-  // or by expanding the sidebar. Sort by updated desc so live ones surface.
-  const recent = [...props.workspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
-  return (
-    <aside className="collapsed-rail col-left">
-      <button
-        type="button"
-        className="collapsed-mini-btn"
-        onClick={props.onExpand}
-        aria-label="Expand navigator"
-        title="Expand"
-      >
-        <ChevronsRight size={15} />
-      </button>
-      <div className="collapsed-mini-divider" aria-hidden />
-      <button
-        type="button"
-        className={`collapsed-mini-btn ${location.pathname === "/dashboard" ? "is-active" : ""}`}
-        title="Dashboard"
-        onClick={() => navigate({ to: "/dashboard" })}
-      >
-        <SearchIcon size={15} />
-      </button>
-      <button
-        type="button"
-        className={`collapsed-mini-btn ${location.pathname === "/history" ? "is-active" : ""}`}
-        title="History"
-        onClick={() => navigate({ to: "/history" })}
-      >
-        <SettingsIcon size={15} />
-      </button>
-      <div className="collapsed-mini-divider" aria-hidden />
-      <div className="collapsed-mini-stack">
-        {recent.map((workspace) => {
-          const isActive = workspace.id === props.activeWorkspaceId;
-          const running = props.sessions.some(
-            (session) => session.workspaceId === workspace.id && session.status === "running",
-          );
-          const letter = (workspace.name.match(/[A-Za-z0-9]/)?.[0] ?? workspace.name[0] ?? "?").toUpperCase();
-          return (
-            <button
-              key={workspace.id}
-              type="button"
-              className={`collapsed-mini-ws ${isActive ? "is-selected" : ""}`}
-              title={`${workspace.name} · ${workspace.branch}`}
-              onClick={() => props.onPickWorkspace(workspace)}
-            >
-              <span className="collapsed-mini-letter">{letter}</span>
-              {running ? <span className="collapsed-mini-dot" aria-hidden /> : null}
-            </button>
-          );
-        })}
-      </div>
-    </aside>
   );
 }
 
@@ -448,93 +723,13 @@ function TopBar(props: {
       </div>
       <div className="cit-top-right">
         <UsageIndicator runtimes={props.runtimes} />
-        <ThemeToggle />
+        <ThemeControls />
         <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={15} />
         </Link>
       </div>
     </header>
   );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => {
-    const next = isDark ? "light" : "dark";
-    applyThemePreference(next);
-  };
-  return (
-    <button
-      type="button"
-      className="cit-icon-btn"
-      onClick={toggle}
-      aria-label="Toggle theme"
-      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
-  );
-}
-
-function BottomBar(props: {
-  activeWorkspace: Workspace | null;
-  activeSession: import("@citadel/contracts").AgentSession | null;
-  sessions: import("@citadel/contracts").AgentSession[];
-}) {
-  const [now, setNow] = useState(() => formatClock(new Date()));
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(formatClock(new Date())), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
-  const autoMode = props.sessions.some(
-    (s) => s.status === "running" || s.status === "starting" || s.status === "waiting_for_input",
-  );
-
-  // Read the head commit of the active workspace so the status bar mirrors the
-  // redesign's "* <message>" hint. Falls back silently if the workspace isn't
-  // yet usable.
-  const recent = useQuery<WorkspaceRecentCommits>({
-    queryKey: ["recent-commits", props.activeWorkspace?.id, 1],
-    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.activeWorkspace?.id}/recent-commits?limit=1`),
-    enabled: Boolean(props.activeWorkspace?.id),
-    staleTime: 30_000,
-  });
-  const headCommitMessage = recent.data?.commits[0]?.message ?? "";
-  const tmuxLabel = props.activeSession?.tmuxSessionName ?? null;
-
-  return (
-    <footer className="cit-bottombar" aria-label="Status bar">
-      <div className="cit-bb-left">
-        <span className="cit-bb-pill">
-          <span className={`cit-pulse ${autoMode ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
-          auto mode {autoMode ? "running" : "on"}
-        </span>
-        <span className="cit-bb-divider" aria-hidden="true" />
-        <span className="cit-bb-item">
-          <span className="cit-bb-mono">{shellCount}</span> {shellCount === 1 ? "shell" : "shells"}
-        </span>
-        <span className="cit-bb-divider" aria-hidden="true" />
-        <span className="cit-bb-item cit-bb-muted">
-          <kbd>ctrl</kbd>+<kbd>k</kbd> palette
-        </span>
-        <span className="cit-bb-item cit-bb-muted">
-          <kbd>c</kbd> new workspace
-        </span>
-      </div>
-      <div className="cit-bb-right">
-        {tmuxLabel ? <span className="cit-bb-tmux">[{tmuxLabel}]</span> : null}
-        {headCommitMessage ? <span className="cit-bb-commit">* {headCommitMessage}</span> : null}
-        <span className="cit-bb-time">{now}</span>
-      </div>
-    </footer>
-  );
-}
-
-function formatClock(d: Date) {
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function EmptyStage(props: { hasRepos: boolean }) {

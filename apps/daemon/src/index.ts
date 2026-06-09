@@ -2,12 +2,11 @@ import { createHash } from "node:crypto";
 import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveDevState } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
-import { ensureCitadelTmuxRunning, ensureWorktreeTmuxRunning } from "@citadel/terminal";
+import { parsePositiveInt } from "./app-helpers.js";
 import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { shouldReapTmuxOrphans } from "./orphan-reaper-safety.js";
 import { reapOrphans } from "./orphan-reaper.js";
-import { setTmuxOwnership } from "./tmux-ownership.js";
 
 // Resolve the worktree root before loading config. When running inside a
 // Citadel checkout, env always wins over dev.json; dev.json wins over an
@@ -81,9 +80,54 @@ if (
 const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
+const layoutMigration = operations.runWorkspaceLayoutMigrations();
+if (layoutMigration.operationId && (layoutMigration.migrated > 0 || layoutMigration.skipped.length > 0)) {
+  console.log(
+    `[workspace-layout-migration] migrated=${layoutMigration.migrated} skipped=${layoutMigration.skipped.length}`,
+  );
+}
 operations.reconcile();
-const daemon = createDaemonApp({ config, configPath, store, operations });
-const { server } = daemon;
+const daemon = await createDaemonApp({ config, configPath, store, operations });
+const { server, protocol } = daemon;
+
+// Boot-time inverse warning: binding a non-loopback host without TLS is the
+// configuration combination that exposes Citadel to the LAN in cleartext.
+// The doctor surfaces this too (config.bind-host-tls); we double-print here
+// so it lands in `journalctl -u citadel.service` for operators who don't
+// look at the cockpit.
+{
+  const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+  if (!LOOPBACK.has(config.bindHost) && !config.tls) {
+    console.warn(
+      `[citadel] WARNING: bindHost=${config.bindHost} is non-loopback but TLS is not configured. Set config.tls={certPath,keyPath} or bind 127.0.0.1.`,
+    );
+  }
+}
+const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, server.keepAliveTimeout);
+server.keepAliveTimeout = keepAliveTimeoutMs;
+server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 1000);
+
+process.on("uncaughtException", (error) => {
+  console.error("[daemon] uncaughtException", error);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[daemon] unhandledRejection", reason);
+  process.exit(1);
+});
+process.on("exit", (code) => {
+  console.log(`[daemon] process exit ${code}`);
+});
+for (const [signal, exitCode] of [
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const) {
+  process.once(signal, () => {
+    console.log(`[daemon] received ${signal}`);
+    process.exit(exitCode);
+  });
+}
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
@@ -105,7 +149,7 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(config.port, config.bindHost, () => {
-  console.log(`Citadel daemon listening on http://${config.bindHost}:${config.port}`);
+  console.log(`Citadel daemon listening on ${protocol}://${config.bindHost}:${config.port}`);
   console.log(`  data dir: ${config.dataDir}`);
   if (isWorktreeDaemon && worktreeRoot) {
     console.log(`  worktree: ${worktreeRoot}`);
@@ -116,50 +160,10 @@ server.listen(config.port, config.bindHost, () => {
       ...(devState?.webPort ? { webPort: devState.webPort } : {}),
     });
   }
-  // Tmux ownership probe + auto-start. Two paths, decided by socket ownership:
-  //   - Prod (systemd): citadel-tmux.service owns a single shared `citadel`
-  //     socket. The daemon kicks the unit up if absent, and reports orphan
-  //     ownership (someone ran `tmux -L citadel` outside the unit) without
-  //     killing — every live agent pane lives in that server.
-  //   - Worktree: the daemon owns a per-checkout socket (CITADEL_TMUX_SOCKET=
-  //     citadel-w-<hash>, set by `make deploy`). Spawned detached so HMR
-  //     restarts of the daemon don't kill agent panes. Per-worktree isolation
-  //     means the orphan-reaper can never SIGKILL prod's sessions.
-  const requestedOwnedSocket =
-    process.env.CITADEL_OWN_TMUX_SOCKET === "1" &&
-    Boolean(process.env.CITADEL_TMUX_SOCKET) &&
-    process.env.CITADEL_TMUX_SOCKET !== "citadel";
-  const ownsTmuxSocket = isWorktreeDaemon || requestedOwnedSocket;
-
-  if (ownsTmuxSocket) {
-    const socket = process.env.CITADEL_TMUX_SOCKET ?? "";
-    ensureWorktreeTmuxRunning(socket)
-      .then((ownership) => {
-        setTmuxOwnership(ownership);
-      })
-      .catch((error) => {
-        console.warn(
-          `[tmux-guard] worktree tmux start failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-  } else {
-    ensureCitadelTmuxRunning()
-      .then((ownership) => {
-        setTmuxOwnership(ownership);
-        if (ownership.kind === "absent") {
-          console.warn(
-            "[tmux-guard] citadel-tmux.service is absent after start attempt — agent spawns will fail until it's up",
-          );
-        } else if (ownership.kind === "orphan") {
-          console.warn(
-            `[tmux-guard] orphan tmux server holding socket (pid=${ownership.pid}, supervised=${ownership.supervisedPid ?? "none"}) — run \`make tmux-service\` to reconcile (destructive: restarts all agents)`,
-          );
-        }
-      })
-      .catch((error) => {
-        console.warn(`[tmux-guard] probe failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-  }
+  // Tmux is workspace-scoped. ensureTmuxSession creates the workspace server
+  // on demand via <CITADEL_TMUX_SOCKET>-ws-<workspaceId>; there is no global
+  // citadel-tmux.service to start at daemon boot.
+  const ownsTmuxSocket = true;
 
   // Boot-time auto-restore. Fires once after listen() succeeds — the
   // cockpit polls /api/state.bootRestore for the running summary while we
@@ -180,7 +184,6 @@ server.listen(config.port, config.bindHost, () => {
         try {
           const summary = await reapOrphans({
             store,
-            ttyd: daemon.ttyd,
             diagnostics: daemon.diagnostics,
             reapTmuxSessions: shouldReapTmuxOrphans({
               daemonPort: config.port,
@@ -190,12 +193,11 @@ server.listen(config.port, config.bindHost, () => {
               allowSharedTmuxReaper: process.env.CITADEL_ALLOW_SHARED_TMUX_REAPER,
             }),
           });
-          if (summary.tmuxReaped.length > 0 || summary.ttydReleased.length > 0) {
-            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length} ttyd=${summary.ttydReleased.length}`);
+          if (summary.tmuxReaped.length > 0) {
+            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length}`);
           }
           daemon.diagnostics.log("reaper", "orphan.done", {
             tmuxReaped: summary.tmuxReaped,
-            ttydReleased: summary.ttydReleased,
           });
         } catch (error) {
           console.warn(`Orphan reaper failed: ${error instanceof Error ? error.message : String(error)}`);

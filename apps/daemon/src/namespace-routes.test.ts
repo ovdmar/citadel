@@ -11,17 +11,16 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
 process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
-type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null };
+type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null; position: number };
 type Workspace = { id: string; name: string; namespaceId: string | null };
-const SLOW_DAEMON_TEST_TIMEOUT = 30_000;
 
-describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEOUT }, () => {
+describe("namespace routes + MCP integration", () => {
   it("creates a namespace, creates a workspace in it, lists, and reassigns through the MCP tool surface", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
@@ -42,7 +41,7 @@ describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEO
       archivedAt: null,
     });
 
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // 1. Empty list to start.
@@ -156,7 +155,7 @@ describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEO
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const missing = await fetch(`${baseUrl}/api/namespaces/ns_missing`, { method: "DELETE" });
@@ -238,8 +237,8 @@ describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEO
       expect(recreate.namespace.archivedAt).toBeNull();
       expect(recreate.namespace.color).toBe("#445566");
 
-      // assign_workspace_to_namespace via MCP without namespaceId is rejected
-      // by the daemon (Zod parse), surfacing a JSON-RPC error to the caller.
+      // assign_workspace_to_namespace via JSON-RPC without namespaceId returns
+      // a protocol-level error envelope and invalid params use HTTP 400.
       const missingArgResponse = await fetch(`${baseUrl}/api/mcp/rpc`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -250,11 +249,44 @@ describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEO
           params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
         }),
       });
-      expect(missingArgResponse.status).toBe(200);
+      expect(missingArgResponse.status).toBe(400);
       const missingArgBody = (await missingArgResponse.json()) as {
-        error?: { message?: string };
+        error?: string;
+        issues?: Array<{ path?: string; message?: string }>;
       };
-      expect(missingArgBody.error?.message).toContain("namespaceId");
+      expect(missingArgBody.error).toBe("validation_failed");
+      expect(
+        missingArgBody.issues?.some(
+          (issue) => issue.path?.includes("namespaceId") || issue.message?.includes("namespaceId"),
+        ),
+      ).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("reorders active namespaces through REST", async () => {
+    const fixture = createFixture();
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const bravo = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "Bravo",
+      });
+      const alpha = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "Alpha",
+      });
+      expect(
+        (await getJson<{ namespaces: Namespace[] }>(`${baseUrl}/api/namespaces`)).namespaces.map((ns) => ns.name),
+      ).toEqual(["Bravo", "Alpha"]);
+
+      const result = await postJson<{ reordered: true; namespaces: Namespace[] }>(`${baseUrl}/api/namespaces/reorder`, {
+        namespaceIds: [alpha.namespace.id, bravo.namespace.id],
+      });
+      expect(result.namespaces.map((ns) => ns.name)).toEqual(["Alpha", "Bravo"]);
+      expect(
+        (await getJson<{ namespaces: Namespace[] }>(`${baseUrl}/api/namespaces`)).namespaces.map((ns) => ns.name),
+      ).toEqual(["Alpha", "Bravo"]);
     } finally {
       await closeServer(server);
     }
@@ -278,12 +310,12 @@ function createFixture() {
   config.dataDir = dir;
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function createGitRepo(dir: string) {

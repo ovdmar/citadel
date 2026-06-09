@@ -66,15 +66,14 @@ export interface RuntimeStatusAdapter {
 }
 
 const NOOP_ADAPTER: RuntimeStatusAdapter = {
-  runtimeId: "shell",
+  runtimeId: "noop",
   createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
   observe: () => null,
 };
 
 // Adapter registry. Cursor-agent and any unknown runtime fall back to the
 // codex adapter — same heuristics (pane-activity timestamp + sandbox-style
-// chrome footer). Shell sessions are skipped entirely by the monitor; the
-// noop adapter is a defensive default.
+// chrome footer). The noop adapter is a defensive default.
 export function getStatusAdapter(runtimeId: string): RuntimeStatusAdapter {
   switch (runtimeId) {
     case "claude-code":
@@ -93,6 +92,7 @@ export {
   CODEX_REASON_INTERRUPT,
   CODEX_REASON_SANDBOX_APPROVAL,
   CODEX_REASON_STABLE_TIMEOUT,
+  CODEX_REASON_TURN_OUTPUT_ACTIVITY,
   codexStatusAdapter,
 } from "./codex.js";
 export { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "./elapsed-timer.js";

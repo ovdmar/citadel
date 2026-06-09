@@ -62,7 +62,7 @@ a:hover {
   min-height: 100vh;
   background: var(--surface);
   /* Positioning context for .route-overlay (Settings/Scratchpad/etc render
-   * inside it as absolute overlays so the Cockpit and its ttyd iframes stay
+   * inside it as absolute overlays so the Cockpit and its terminal panes stay
    * mounted underneath). Without this the overlay would anchor to the
    * viewport via the default initial containing block and the cockpit-shell
    * grid below would still receive pointer events. */
@@ -72,15 +72,18 @@ a:hover {
 /* Holds the active child route content when the URL is anything other than
  * `/`. Sits over the Cockpit (which is always mounted in CockpitLayout) so
  * Settings/Scratchpad/etc. visually replace the cockpit without unmounting
- * its TerminalPane iframes. Returning to `/` simply hides this layer via
- * `data-hidden` and the live iframes are right where they were — the
+ * its TerminalPane instances. Returning to `/` simply hides this layer via
+ * `data-hidden` and the live panes are right where they were — the
  * overlay's Outlet stays mounted in a stable DOM position, so TanStack
  * Router never tears the parent layout (and Cockpit underneath) down. */
 .route-overlay {
   position: absolute;
   inset: 0;
   background: var(--surface);
-  z-index: 10;
+  /* Must sit above Cockpit-level fixed overlays (modal-backdrop z=25,
+   * command-backdrop z=30) because Cockpit stays mounted underneath route
+   * pages. Otherwise hidden cockpit notices can intercept Settings clicks. */
+  z-index: 40;
   overflow: hidden;
   display: grid;
   min-height: 0;
@@ -111,25 +114,44 @@ a:hover {
 .cit-pulse-run {
   background: var(--c-warn);
   box-shadow: 0 0 0 3px var(--c-warn-bg);
+  --cit-pulse-ripple: var(--c-warn);
 }
 .cit-pulse-bad {
   background: var(--c-bad);
   box-shadow: 0 0 0 3px var(--c-bad-bg);
+  --cit-pulse-ripple: var(--c-bad);
 }
 .cit-pulse-info {
   background: var(--c-info);
   box-shadow: 0 0 0 3px var(--c-info-bg);
+  --cit-pulse-ripple: var(--c-info);
 }
 .cit-pulse-idle {
   background: var(--c-fg-4);
 }
+/* Retained for older markup/tests that may still reference the class directly.
+   Current lifecycle "done" indicators use cit-pulse-idle; fresh completions
+   request attention via cit-pulse-bad until that session has been viewed. */
+.cit-pulse-done {
+  background: var(--c-ok);
+  box-shadow: 0 0 0 3px var(--c-ok-bg);
+  --cit-pulse-ripple: var(--c-ok);
+}
+/* Shared ripple animation for the "something is happening" pulse modifiers.
+   Each modifier sets --cit-pulse-ripple to its own color via the rules above.
+   Note: applying the ripple to cit-pulse-bad universally (not just lifecycle
+   dots) means the inspector's "down" deploy chip at inspector.tsx:283 now
+   pulses too — that is intentional. Red pulse = attention is the design
+   language; a "down" app is an attention state. */
 .cit-pulse-run::after,
+.cit-pulse-done::after,
+.cit-pulse-bad::after,
 .cit-pulse-info::after {
   content: "";
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  border: 1px solid var(--c-warn);
+  border: 1px solid var(--cit-pulse-ripple);
   opacity: 0;
   animation: cit-ripple 1.8s ease-out infinite;
 }
@@ -155,6 +177,11 @@ a:hover {
 /* Cockpit shell */
 
 .cockpit-shell {
+  /* Keep tab bars, popovers, and iframe chrome below route-level overlays
+   * while the cockpit remains mounted under Settings/Scratchpad. */
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr) 28px;
   height: 100vh;
@@ -163,10 +190,11 @@ a:hover {
 }
 
 .cockpit-body {
+  --col-left-track: var(--col-left, 252px);
+  --col-right-divider-track: 4px;
+  --col-right-track: var(--col-right, 320px);
   display: grid;
-  grid-template-columns:
-    var(--col-left, 252px) 4px minmax(0, 1fr) 4px
-    var(--col-right, 320px);
+  grid-template-columns: var(--col-left-track) 4px minmax(0, 1fr) var(--col-right-divider-track) var(--col-right-track);
   min-height: 0;
   overflow: hidden;
   padding: 0 8px 8px 8px;
@@ -174,15 +202,16 @@ a:hover {
 }
 
 .cockpit-body.left-collapsed {
-  grid-template-columns: 56px 4px minmax(0, 1fr) 4px var(--col-right, 320px);
+  --col-left-track: 56px;
 }
 
 .cockpit-body.right-collapsed {
-  grid-template-columns: var(--col-left, 252px) 4px minmax(0, 1fr) 4px 36px;
+  --col-right-track: 36px;
 }
 
-.cockpit-body.left-collapsed.right-collapsed {
-  grid-template-columns: 56px 4px minmax(0, 1fr) 4px 36px;
+.cockpit-body.right-hidden {
+  --col-right-divider-track: 0;
+  --col-right-track: 0;
 }
 
 /* Hide the resize handle on a collapsed side — there's nothing to resize. */
@@ -411,11 +440,6 @@ a:hover {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-ok);
-  box-shadow: 0 0 0 1.5px var(--c-canvas);
 }
 
 /* Generic blocks reused across views */

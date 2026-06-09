@@ -1,13 +1,15 @@
 {
   "name": "@citadel/contracts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./pr-routes": "./dist/pr-routes.js"
+    "./pr-routes": "./dist/pr-routes.js",
+    "./doctor": "./dist/doctor.js",
+    "./shortcuts": "./dist/shortcuts.js"
   },
   "dependencies": {
     "zod": "^3.24.1"

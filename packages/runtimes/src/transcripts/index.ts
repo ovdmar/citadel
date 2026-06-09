@@ -43,6 +43,7 @@ export function getUserPromptsForSession(input: {
   workspacePath: string;
   sessionStartedAt: string;
   home?: string;
+  codexHome?: string;
 }): RuntimeUserPrompt[] {
   const adapter = getTranscriptAdapter(input.runtimeId);
   if (!adapter) return [];
@@ -51,5 +52,6 @@ export function getUserPromptsForSession(input: {
     sessionStartedAt: input.sessionStartedAt,
   };
   if (input.home !== undefined) params.home = input.home;
+  if (input.codexHome !== undefined) params.codexHome = input.codexHome;
   return adapter.getUserPrompts(params);
 }

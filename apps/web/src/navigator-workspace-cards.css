@@ -1,0 +1,45 @@
+.nav-workspace-checkouts {
+  display: grid;
+  gap: 2px;
+  padding: 0 0 2px 18px;
+}
+
+.nav-workspace-checkouts--repo-grouped {
+  padding-left: 0;
+}
+
+.nav-checkout-card {
+  min-height: 34px;
+  border-left: 1px solid var(--c-line-1);
+  position: relative;
+}
+
+.nav-checkout-card:hover .nav-checkout-drop,
+.nav-checkout-card:focus-within .nav-checkout-drop {
+  display: inline-flex;
+}
+
+.nav-section-icons > button:first-child,
+.nav-section-icons > button:last-child,
+.workspace-card-collapse[aria-label^="Add worktree"],
+.workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"] {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.workspace-card-collapse[aria-label^="Add worktree"],
+.workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"] {
+  pointer-events: none;
+}
+
+.nav-section:hover .nav-section-icons > button:first-child,
+.nav-section:hover .nav-section-icons > button:last-child,
+.nav-section:focus-within .nav-section-icons > button:first-child,
+.nav-section:focus-within .nav-section-icons > button:last-child,
+.workspace-card-wrap:hover .workspace-card-collapse[aria-label^="Add worktree"],
+.workspace-card-wrap:hover .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"],
+.workspace-card-wrap:focus-within .workspace-card-collapse[aria-label^="Add worktree"],
+.workspace-card-wrap:focus-within .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"] {
+  opacity: 1;
+  pointer-events: auto;
+}

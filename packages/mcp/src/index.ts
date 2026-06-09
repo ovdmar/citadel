@@ -2,16 +2,21 @@ import type {
   ActivityEvent,
   AgentRuntime,
   AgentSession,
-  HookAction,
-  HookLink,
   Namespace,
   Operation,
   ProviderHealth,
   Repo,
   ScheduledAgent,
   Workspace,
+  WorkspaceManager,
+  WorkspacePlanVersion,
+  WorktreeCheckout,
 } from "@citadel/contracts";
+import { AGENTS_SYSTEM_TOOL_DEFINITIONS, type AgentsSystemToolName } from "./agents-system-tools.js";
+import { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
 import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
+
+export { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
 
 export type AgentSessionSummary = AgentSession & {
   namespaceId: string | null;
@@ -32,8 +37,10 @@ export type McpToolName =
   | "list_workspaces"
   | "list_agent_sessions"
   | "list_provider_health"
+  | "list_agent_runtimes"
   | "list_runtimes"
   | "list_workspace_links"
+  | AgentsSystemToolName
   | "register_repo"
   | "create_workspace"
   | "start_agent_session"
@@ -54,6 +61,7 @@ export type McpToolName =
   | ScratchpadToolName
   | "list_deployed_apps"
   | "redeploy_app"
+  | "undeploy_app"
   | "read_agent_history"
   | "list_scheduled_agents"
   | "create_scheduled_agent"
@@ -70,6 +78,23 @@ export type McpToolDefinition = {
   destructive: boolean;
 };
 
+function deployedAppActionTool(name: "redeploy_app" | "undeploy_app", description: string, allAction: string) {
+  return {
+    name,
+    description,
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: {
+        workspaceId: { type: "string" },
+        name: { type: "string", maxLength: 80, description: `App name from list_deployed_apps. Omit to ${allAction}.` },
+      },
+      additionalProperties: false,
+    },
+    destructive: true,
+  } satisfies McpToolDefinition;
+}
+
 export type McpToolContext = {
   repos: Repo[];
   workspaces: Workspace[];
@@ -79,6 +104,9 @@ export type McpToolContext = {
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   scheduledAgents?: ScheduledAgent[];
+  checkouts?: WorktreeCheckout[];
+  workspacePlanVersions?: WorkspacePlanVersion[];
+  managers?: WorkspaceManager[];
   namespaces: Namespace[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
   // Absolute path of the daemon's notes file. Surfaced through `inspect_status`
@@ -202,7 +230,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
-      name: "list_runtimes",
+      name: "list_agent_runtimes",
       description: "List configured agent runtimes and their health.",
       inputSchema: { type: "object", additionalProperties: false },
       destructive: false,
@@ -213,10 +241,11 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
       destructive: false,
     },
+    ...AGENTS_SYSTEM_TOOL_DEFINITIONS,
     {
       name: "register_repo",
       description:
-        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to <repo>-worktrees next to the repo). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
+        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to Citadel's dataDir/worktrees/<repo>). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
       inputSchema: {
         type: "object",
         required: ["rootPath"],
@@ -251,8 +280,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "start_agent_session",
-      description:
-        "Start a configured agent runtime in a workspace through the daemon operation service. If namespaceId is provided, the workspace is reassigned to that namespace as a side effect (assignment-on-launch).",
+      description: "Start an agent session with optional systemPrompt or server-resolved role prompt.",
       inputSchema: {
         type: "object",
         required: ["workspaceId", "runtimeId"],
@@ -261,6 +289,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           runtimeId: { type: "string" },
           displayName: { type: "string" },
           prompt: { type: "string" },
+          systemPrompt: { type: "string" },
+          role: { type: "string" },
           namespaceId: { type: "string" },
         },
         additionalProperties: false,
@@ -350,7 +380,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "launch_agent",
       description:
-        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Optional systemPrompt is appended after Citadel's global base prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
       inputSchema: {
         type: "object",
         required: ["prompt"],
@@ -358,6 +388,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           repoId: { type: "string", description: "Internal repo id (provide this OR repoName)." },
           repoName: { type: "string", description: "Configured repo display name (provide this OR repoId)." },
           prompt: { type: "string", minLength: 1 },
+          systemPrompt: { type: "string" },
           runtimeId: { type: "string", default: "claude-code" },
           displayName: { type: "string", maxLength: 80 },
           workspaceName: { type: "string", maxLength: 80 },
@@ -425,25 +456,16 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       },
       destructive: false,
     },
-    {
-      name: "redeploy_app",
-      description:
-        "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
-      inputSchema: {
-        type: "object",
-        required: ["workspaceId"],
-        properties: {
-          workspaceId: { type: "string" },
-          name: {
-            type: "string",
-            maxLength: 80,
-            description: "App name from list_deployed_apps. Omit to redeploy all.",
-          },
-        },
-        additionalProperties: false,
-      },
-      destructive: true,
-    },
+    deployedAppActionTool(
+      "redeploy_app",
+      "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      "redeploy all",
+    ),
+    deployedAppActionTool(
+      "undeploy_app",
+      "Invoke the workspace's undeploy hook (`<workspacePath>/.citadel/hooks/undeploy`) with `[name]`. Omitting `name` undeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      "undeploy all",
+    ),
     {
       name: "list_scheduled_agents",
       description:
@@ -593,6 +615,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         namespaces: context.namespaces.length,
         operations: context.operations.slice(0, 10),
         providerHealth: context.providerHealth,
+        checkouts: context.checkouts?.length ?? 0,
         scratchpad: { path: context.scratchpadPath },
       };
     case "list_repos":
@@ -624,10 +647,30 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { providerHealth: context.providerHealth };
     case "list_scheduled_agents":
       return { scheduledAgents: context.scheduledAgents ?? [] };
+    case "list_agent_runtimes":
     case "list_runtimes":
       return { runtimes: context.runtimes };
     case "list_workspace_links":
       return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
+    case "list_workspace_checkouts": {
+      if (!context.checkouts) return { error: "context_tool_requires_daemon" };
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+      return { checkouts: context.checkouts.filter((checkout) => checkout.workspaceId === workspaceId) };
+    }
+    case "get_workspace_plan": {
+      if (!context.workspacePlanVersions) return { error: "context_tool_requires_daemon" };
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+      const planVersions = context.workspacePlanVersions.filter((plan) => plan.workspaceId === workspaceId);
+      return {
+        workspaceId,
+        activePlan: planVersions.find((plan) => plan.active) ?? null,
+        planVersions,
+      };
+    }
+    case "get_checkout_ticket":
+    case "get_checkout_pr":
+    case "get_checkout_gate_status":
+      return { error: "context_tool_requires_daemon" };
     case "list_namespaces": {
       // includeArchived from the daemon path is honored there; here we only
       // see the active snapshot the daemon serialized into context.namespaces.
@@ -652,6 +695,19 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     }
     case "register_repo":
     case "create_workspace":
+    case "create_workspace_checkout":
+    case "register_workspace_plan":
+    case "report_plan_deviation":
+    case "start_workspace_manager":
+    case "pause_workspace_manager":
+    case "resume_workspace_manager":
+    case "mark_checkout_ready_for_review":
+    case "register_checkout_review_artifact":
+    case "update_ticket_status":
+    case "launch_pm_agent":
+    case "launch_architect_agent":
+    case "launch_implementation_agent":
+    case "launch_prototype_agent":
     case "start_agent_session":
     case "launch_agent":
     case "stop_agent_session":
@@ -667,6 +723,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "append_scratchpad":
     case "list_deployed_apps":
     case "redeploy_app":
+    case "undeploy_app":
     case "create_scheduled_agent":
     case "update_scheduled_agent":
     case "delete_scheduled_agent":
@@ -675,6 +732,14 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "list_scheduled_agent_runs":
     case "read_scheduled_agent_run_log":
       return { error: "scheduled_agent_run_tool_requires_daemon" };
+    case "list_review_threads":
+    case "create_review_thread":
+    case "reply_review_thread":
+    case "resolve_review_thread":
+    case "reopen_review_thread":
+      return { error: "review_tool_requires_daemon" };
+    case "get_citadel_context":
+      return { error: "context_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
     case "read_agent_history":
@@ -713,45 +778,6 @@ function annotateSession(session: AgentSession, workspaces: Workspace[], namespa
 function filterByNamespaceId(workspaces: Workspace[], namespaceId: unknown) {
   if (typeof namespaceId !== "string") return workspaces;
   return workspaces.filter((workspace) => workspace.namespaceId === namespaceId);
-}
-
-export function serializeWorkspaceResource(input: {
-  repos: Repo[];
-  workspaces: Workspace[];
-  sessions: AgentSession[];
-}) {
-  return {
-    repos: input.repos,
-    workspaces: input.workspaces,
-    sessions: input.sessions.map((session) => ({
-      id: session.id,
-      workspaceId: session.workspaceId,
-      runtimeId: session.runtimeId,
-      status: session.status,
-      tmuxSessionName: session.tmuxSessionName,
-    })),
-  };
-}
-
-export function listWorkspaceLinks(activity: ActivityEvent[], workspaceId: unknown) {
-  const events =
-    typeof workspaceId === "string" ? activity.filter((event) => event.workspaceId === workspaceId) : activity;
-  const links: Array<HookLink & { workspaceId: string; eventId: string }> = [];
-  const actions: Array<HookAction & { workspaceId: string; eventId: string }> = [];
-  for (const event of events) {
-    if (!event.workspaceId || !event.hookOutput) continue;
-    links.push(
-      ...event.hookOutput.links.map((link) => ({ ...link, workspaceId: event.workspaceId ?? "", eventId: event.id })),
-    );
-    actions.push(
-      ...event.hookOutput.actions.map((action) => ({
-        ...action,
-        workspaceId: event.workspaceId ?? "",
-        eventId: event.id,
-      })),
-    );
-  }
-  return { links, actions };
 }
 
 function truncatePrompt(text: string | null) {

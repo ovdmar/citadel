@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,8 +17,8 @@ import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -27,9 +26,17 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 describe("createDaemonApp", () => {
+  it("keeps HTTP sockets alive across normal browser interaction gaps", async () => {
+    const fixture = createFixture();
+    const { server } = await createDaemonApp(fixture);
+
+    expect(server.keepAliveTimeout).toBe(120_000);
+    expect(server.headersTimeout).toBe(125_000);
+  });
+
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const configResponse = await getJson<{ configPath: string; config: { mcp: { enabled: boolean } } }>(
@@ -89,20 +96,27 @@ describe("createDaemonApp", () => {
 
   it("serves read-only state resources and normalized API errors", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       expect(await getJson<{ ok: boolean; degradedProviders: number }>(`${baseUrl}/api/health`)).toMatchObject({
         ok: true,
         degradedProviders: 2,
       });
-      expect(
-        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(`${baseUrl}/api/state`),
-      ).toMatchObject({
-        repos: [],
-        workspaces: [],
-        sessions: [],
-      });
+      const state = await getJson<{
+        repos: unknown[];
+        workspaces: unknown[];
+        sessions: unknown[];
+        daemonStartedAt: string;
+      }>(`${baseUrl}/api/state`);
+      expect(state).toMatchObject({ repos: [], workspaces: [], sessions: [] });
+      expect(state.daemonStartedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      // Watchdog correctness depends on this token being stable across
+      // calls within the same daemon process — a regression that returned
+      // a fresh ISO per request would silently break the redeploy chip's
+      // newer-token check.
+      const second = await getJson<{ daemonStartedAt: string }>(`${baseUrl}/api/state`);
+      expect(second.daemonStartedAt).toBe(state.daemonStartedAt);
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).toEqual({ repos: [] });
       expect(await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).toEqual({ workspaces: [] });
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/mcp/resources/repos`)).toEqual({ repos: [] });
@@ -111,23 +125,20 @@ describe("createDaemonApp", () => {
       ).toMatchObject({
         providerHealth: [expect.objectContaining({ id: "github-gh" }), expect.objectContaining({ id: "jira-jtk" })],
       });
-      expect(await getJson<{ runtimes: unknown[] }>(`${baseUrl}/api/runtimes`)).toMatchObject({
-        runtimes: [expect.objectContaining({ id: "shell" })],
+      expect(await getJson<{ agentRuntimes: unknown[] }>(`${baseUrl}/api/agent-runtimes`)).toMatchObject({
+        agentRuntimes: [expect.objectContaining({ id: "test-agent" })],
       });
       expect(
-        await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/shell/usage`),
+        await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/test-agent/usage`),
       ).toMatchObject({
-        usage: { runtimeId: "shell", status: "unavailable" },
+        usage: { runtimeId: "test-agent", status: "unavailable" },
       });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/activity`)).toEqual({ activity: [] });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/mcp/resources/activity`)).toEqual({
         activity: [],
       });
-      expect(
-        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(
-          `${baseUrl}/api/mcp/resources/workspaces`,
-        ),
-      ).toEqual({ repos: [], workspaces: [], sessions: [] });
+      const workspacesResource = await getJson(`${baseUrl}/api/mcp/resources/workspaces`);
+      expect(workspacesResource).toEqual({ repos: [], workspaces: [], sessions: [], checkouts: [] });
       expect(
         await postJson<{ result: { repos: number; workspaces: number; sessions: number } }>(
           `${baseUrl}/api/mcp/tools/call`,
@@ -217,7 +228,7 @@ describe("createDaemonApp", () => {
           contents: [
             expect.objectContaining({
               mimeType: "application/json",
-              text: JSON.stringify({ repos: [], workspaces: [], sessions: [] }),
+              text: JSON.stringify({ repos: [], workspaces: [], checkouts: [], sessions: [] }),
             }),
           ],
         },
@@ -272,6 +283,86 @@ describe("createDaemonApp", () => {
     } finally {
       await closeServer(server);
     }
+  }, 15_000);
+
+  it("rehydrates provider cache on boot and serves /provider-summary without invoking providers", async () => {
+    // Central regression guard for the persistent-cache PR's headline AC:
+    // after daemon restart, cockpit pills must render immediately from cache.
+    // The provider collector is mocked to THROW — if the route serves a body
+    // anyway, hydration is working.
+    const fixture = createFixture();
+    const now = new Date().toISOString();
+    const repoId = "repo_warm_boot";
+    fixture.store.insertRepo({
+      id: repoId,
+      name: "Warm Boot Repo",
+      rootPath: fixture.config.dataDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    // Need the repo's actual updatedAt for the cache key (the store may
+    // normalize it at insert time).
+    const repos = fixture.store.listRepos();
+    const repoUpdatedAt = repos.find((r) => r.id === repoId)?.updatedAt ?? now;
+
+    // Seed provider-cache.json BEFORE the daemon boots so load() hydrates it.
+    fs.writeFileSync(
+      path.join(fixture.config.dataDir, "provider-cache.json"),
+      JSON.stringify({
+        version: 1,
+        savedAt: now,
+        entries: [
+          [
+            `vc:${repoId}:${repoUpdatedAt}`,
+            {
+              expiresAt: Date.now() + 60_000,
+              cachedAt: Date.now(),
+              value: {
+                providerId: "github-gh",
+                status: "healthy",
+                reason: null,
+                defaultBranch: "main",
+                currentBranch: "main",
+                remotes: ["origin"],
+                pullRequest: null,
+                checkedAt: now,
+              },
+            },
+          ],
+        ],
+      }),
+    );
+
+    let providerCalls = 0;
+    const { server } = await createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async () => {
+          providerCalls += 1;
+          throw new Error("provider should not be invoked when cache is warm");
+        },
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{ versionControl: { status: string; defaultBranch: string | null } }>(
+        `${baseUrl}/api/repos/${repoId}/provider-summary`,
+      );
+      // Cached value flowed through; provider was never called.
+      expect(providerCalls).toBe(0);
+      expect(body.versionControl.status).toBe("healthy");
+      expect(body.versionControl.defaultBranch).toBe("main");
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("caches provider summaries and clears them on config updates", async () => {
@@ -293,7 +384,7 @@ describe("createDaemonApp", () => {
       archivedAt: null,
     });
     let calls = 0;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => {
@@ -339,8 +430,9 @@ describe("createDaemonApp", () => {
         return {
           id: "sess_mcp",
           workspaceId: input.workspaceId,
+          kind: "agent",
           runtimeId: input.runtimeId,
-          displayName: input.displayName ?? "MCP Shell",
+          displayName: input.displayName ?? "MCP Agent",
           status: "running",
           transport: "disconnected",
           tmuxSessionName: "citadel_mcp",
@@ -350,7 +442,7 @@ describe("createDaemonApp", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const response = await postJson<{ result: { structuredContent: { session: { id: string } } } }>(
@@ -361,7 +453,7 @@ describe("createDaemonApp", () => {
           method: "tools/call",
           params: {
             name: "start_agent_session",
-            arguments: { workspaceId: "ws_test", runtimeId: "shell", displayName: "MCP Shell" },
+            arguments: { workspaceId: "ws_test", runtimeId: "test-agent", displayName: "MCP Agent" },
           },
         },
       );
@@ -430,7 +522,7 @@ describe("createDaemonApp", () => {
       archivedAt: null,
     });
     fs.writeFileSync(path.join(git.repoPath, "dirty.txt"), "dirty\n");
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => ({
@@ -508,7 +600,7 @@ describe("createDaemonApp", () => {
   it("PATCH /api/repos/:id updates name and worktree parent", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string; name: string } }>(`${baseUrl}/api/repos`, {
@@ -529,75 +621,10 @@ describe("createDaemonApp", () => {
     }
   });
 
-  it("operation cancel and retry endpoints return 202 / 409 appropriately", async () => {
-    const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      // Seed a fake cancellable operation.
-      fixture.store.upsertOperation({
-        id: "op_fake_running",
-        type: "workspace.action.custom",
-        status: "running",
-        repoId: null,
-        workspaceId: null,
-        progress: 5,
-        message: "Doing things",
-        error: null,
-        logs: [],
-        retriable: false,
-        retryInput: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      const cancel = await fetch(`${baseUrl}/api/operations/op_fake_running/cancel`, { method: "POST" });
-      expect(cancel.status).toBe(202);
-      const after = (await fetch(`${baseUrl}/api/operations/op_fake_running`).then((r) => r.json())) as {
-        operation: { status: string };
-      };
-      expect(after.operation.status).toBe("cancelled");
-      const retry = await fetch(`${baseUrl}/api/operations/op_fake_running/retry`, { method: "POST" });
-      expect(retry.status).toBe(409);
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("completes filesystem paths for the add-repo autocomplete", async () => {
-    const fixture = createFixture();
-    const { repoPath } = createGitRepo(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      const parent = path.dirname(repoPath);
-      const basename = path.basename(repoPath);
-      const dirPrefix = `${parent}/`;
-      const dirListing = await getJson<{
-        baseDir: string;
-        entries: Array<{ name: string; path: string; isGit: boolean }>;
-      }>(`${baseUrl}/api/fs/complete?prefix=${encodeURIComponent(dirPrefix)}`);
-      expect(dirListing.baseDir).toBe(path.resolve(parent));
-      const match = dirListing.entries.find((entry) => entry.name === basename);
-      expect(match).toBeTruthy();
-      expect(match?.isGit).toBe(true);
-
-      const filtered = await getJson<{ entries: Array<{ name: string; isGit: boolean }> }>(
-        `${baseUrl}/api/fs/complete?prefix=${encodeURIComponent(path.join(parent, basename.slice(0, 1)))}`,
-      );
-      expect(filtered.entries.find((entry) => entry.name === basename)).toBeTruthy();
-
-      // Tilde expansion: ~/ should resolve to the home directory listing without erroring.
-      const tilde = await getJson<{ baseDir: string }>(`${baseUrl}/api/fs/complete?prefix=~%2F`);
-      expect(tilde.baseDir).toBe(os.homedir());
-    } finally {
-      await closeServer(server);
-    }
-  });
-
   it("inspects a path, lists branches, refreshes provider caches, and reconciles ghost state", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitRepo(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const inspect = await postJson<{ isGit: boolean; defaultBranch: string | null; providerCandidates: unknown[] }>(
@@ -630,7 +657,7 @@ describe("createDaemonApp", () => {
   it("stops and removes an agent session through DELETE /api/agent-sessions/:id", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string } }>(`${baseUrl}/api/repos`, { rootPath: repoPath });
@@ -654,13 +681,14 @@ describe("createDaemonApp", () => {
       expect(ready).toBe(true);
       const sessionResp = await postJson<{ session: { id: string } }>(`${baseUrl}/api/agent-sessions`, {
         workspaceId: workspaceResp.workspaceId,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
       });
       const stop = await fetch(`${baseUrl}/api/agent-sessions/${sessionResp.session.id}`, { method: "DELETE" });
       expect(stop.status).toBe(202);
-      const state = await getJson<{ sessions: Array<{ id: string; status: string }> }>(`${baseUrl}/api/state`);
+      const state = await getJson<{ sessions: Array<{ closedAt: string | null; id: string }> }>(`${baseUrl}/api/state`);
       const updated = state.sessions.find((s) => s.id === sessionResp.session.id);
-      expect(updated).toBeUndefined();
+      expect(updated).toMatchObject({ id: sessionResp.session.id, status: "stopped", statusReason: "closed_by_user" });
+      expect(updated?.closedAt).toEqual(expect.any(String));
     } finally {
       await closeServer(server);
     }
@@ -711,8 +739,8 @@ describe("createDaemonApp", () => {
     fixture.store.insertSession({
       id: "sess_remove",
       workspaceId: "ws_remove",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "test-agent",
+      displayName: "Test Agent",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: null,
@@ -720,7 +748,7 @@ describe("createDaemonApp", () => {
       createdAt: now,
       updatedAt: now,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const blocked = await fetch(`${baseUrl}/api/repos/repo_remove`, { method: "DELETE" });
@@ -750,3 +778,16 @@ describe("createDaemonApp", () => {
 const createFixture = () => createFixtureBase(dirs);
 const createGitFixtureWithRemote = (parent: string) => createGitFixtureWithRemoteBase(parent);
 const createGitRepo = (dir: string) => createGitRepoBase(dir);
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}

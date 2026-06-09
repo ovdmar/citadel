@@ -1,6 +1,14 @@
-import type { Operation, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { SECTION_ORDER, buildGroupTree, collectGroupPaths } from "./navigator-groups.js";
+import {
+  SECTION_ORDER,
+  buildGroupTree,
+  collectGroupPaths,
+  findGroupPathForWorkspace,
+  flattenWorkspaceOrder,
+  normalizeNavigatorGrouping,
+  treeGroupingFor,
+} from "./navigator-groups.js";
 
 const ts = "2026-01-01T00:00:00.000Z";
 
@@ -22,7 +30,7 @@ function makeRepo(id: string, name: string): Repo {
   };
 }
 
-function makeWorkspace(id: string, repoId: string, overrides: Partial<Workspace> = {}): Workspace {
+function makeWorkspace(id: string, repoId: string | null, overrides: Partial<Workspace> = {}): Workspace {
   return {
     id,
     repoId,
@@ -42,6 +50,44 @@ function makeWorkspace(id: string, repoId: string, overrides: Partial<Workspace>
     lifecycle: "ready",
     dirty: false,
     namespaceId: null,
+    createdAt: ts,
+    updatedAt: ts,
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function makeNamespace(id: string, name: string, position = 0): Namespace {
+  return {
+    id,
+    name,
+    color: null,
+    position,
+    createdAt: ts,
+    updatedAt: ts,
+    archivedAt: null,
+  };
+}
+
+function makeCheckout(
+  id: string,
+  workspaceId: string,
+  repoId: string,
+  overrides: Partial<WorktreeCheckout> = {},
+): WorktreeCheckout {
+  return {
+    id,
+    workspaceId,
+    repoId,
+    name: id,
+    path: `/wt/${workspaceId}/${id}`,
+    branch: `feat/${id}`,
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: null,
+    gateStatus: "not_started",
     createdAt: ts,
     updatedAt: ts,
     archivedAt: null,
@@ -127,6 +173,99 @@ describe("buildGroupTree", () => {
     const tree = buildGroupTree([orphan], repos, [], [], ["repo"]);
     expect(tree[0]?.label).toBe("Unknown repo");
   });
+
+  it("omits repo-less structured Homes with no checkouts from repo grouping", () => {
+    const home = makeWorkspace("home", null, { kind: "root", mode: "structured" });
+    expect(buildGroupTree([home], repos, [], [], ["repo"])).toEqual([]);
+  });
+
+  it("groups structured Homes by checkout repo when grouped by repo", () => {
+    const home = makeWorkspace("home", null, {
+      kind: "root",
+      mode: "structured",
+      path: "/structured/home",
+      rootPath: "/structured/home",
+      branch: "home",
+    });
+    const tree = buildGroupTree([home], repos, [], [], ["repo"], [], [makeCheckout("api", home.id, "r-a")]);
+    expect(tree.map((node) => ({ label: node.label, count: node.count, kind: node.kind }))).toEqual([
+      { label: "alpha", count: 1, kind: "leaf" },
+    ]);
+    expect(tree[0]?.kind === "leaf" ? tree[0].workspaces.map((entry) => entry.workspace.id) : []).toEqual(["home"]);
+  });
+
+  it("dedupes a structured Home once per repo bucket", () => {
+    const home = makeWorkspace("home", null, { kind: "root", mode: "structured" });
+    const tree = buildGroupTree(
+      [home],
+      repos,
+      [],
+      [],
+      ["repo"],
+      [],
+      [makeCheckout("api", home.id, "r-a"), makeCheckout("web", home.id, "r-a")],
+    );
+    expect(tree[0]?.count).toBe(1);
+    expect(tree[0]?.kind === "leaf" ? tree[0].workspaces : []).toHaveLength(1);
+  });
+
+  it("groups workspace rows directly by namespace", () => {
+    const namespace = makeNamespace("ns_team", "Team");
+    const ws = [
+      makeWorkspace("w-team", "r-a", { namespaceId: namespace.id }),
+      makeWorkspace("w-none", "r-a", { namespaceId: null }),
+    ];
+    const tree = buildGroupTree(ws, repos, [], [], ["namespace"], [namespace]);
+    expect(tree.map((node) => ({ label: node.label, count: node.count, kind: node.kind }))).toEqual([
+      { label: "Team", count: 1, kind: "leaf" },
+      { label: "Uncategorized", count: 1, kind: "leaf" },
+    ]);
+    expect(tree[0]?.kind === "leaf" ? tree[0].workspaces.map((entry) => entry.workspace.id) : []).toEqual(["w-team"]);
+  });
+
+  it("orders namespace groups by persisted position", () => {
+    const first = makeNamespace("ns_first", "First", 2048);
+    const second = makeNamespace("ns_second", "Second", 1024);
+    const ws = [
+      makeWorkspace("w-first", "r-a", { namespaceId: first.id }),
+      makeWorkspace("w-second", "r-a", { namespaceId: second.id }),
+    ];
+    const tree = buildGroupTree(ws, repos, [], [], ["namespace"], [first, second]);
+    expect(tree.map((node) => node.label)).toEqual(["Second", "First", "Uncategorized"]);
+  });
+});
+
+describe("treeGroupingFor", () => {
+  it("uses workspace-root rendering for the default workspace grouping", () => {
+    expect(treeGroupingFor("workspace")).toEqual([]);
+    expect(treeGroupingFor(["workspace"])).toEqual([]);
+  });
+
+  it("groups directly by namespace only with workspace leaf mode", () => {
+    expect(treeGroupingFor("namespace")).toEqual(["namespace"]);
+    expect(treeGroupingFor(["repo", "namespace"])).toEqual(["repo"]);
+    expect(treeGroupingFor(["status", "namespace"])).toEqual(["status"]);
+  });
+
+  it("preserves ordered nested grouping and treats workspace as the leaf mode", () => {
+    expect(treeGroupingFor(["repo", "status"])).toEqual(["repo", "status"]);
+    expect(treeGroupingFor(["namespace", "workspace"])).toEqual(["namespace"]);
+  });
+});
+
+describe("normalizeNavigatorGrouping", () => {
+  it("defaults empty or legacy none values to workspace", () => {
+    expect(normalizeNavigatorGrouping([])).toEqual(["workspace"]);
+    expect(normalizeNavigatorGrouping("none")).toEqual(["workspace"]);
+  });
+
+  it("allows workspace with namespace but not namespace with repo/status", () => {
+    expect(normalizeNavigatorGrouping("namespace")).toEqual(["namespace", "workspace"]);
+    expect(normalizeNavigatorGrouping(["workspace", "namespace"])).toEqual(["namespace", "workspace"]);
+    expect(normalizeNavigatorGrouping(["workspace", "repo", "status"])).toEqual(["repo", "status"]);
+    expect(normalizeNavigatorGrouping(["repo", "namespace"])).toEqual(["repo"]);
+    expect(normalizeNavigatorGrouping(["status", "namespace"])).toEqual(["status"]);
+  });
 });
 
 describe("collectGroupPaths", () => {
@@ -138,5 +277,60 @@ describe("collectGroupPaths", () => {
     expect(paths.has("repo=alpha")).toBe(true);
     expect(paths.has("repo=alpha/status=dirty")).toBe(true);
     expect(paths.has("repo=alpha/status=idle")).toBe(true);
+  });
+});
+
+describe("flattenWorkspaceOrder", () => {
+  const repoA = makeRepo("r-a", "alpha");
+  const repoB = makeRepo("r-b", "bravo");
+  const repos = [repoA, repoB];
+
+  it("returns an empty list for an empty tree (grouping = none)", () => {
+    expect(flattenWorkspaceOrder([])).toEqual([]);
+  });
+
+  it("walks leaves in depth-first tree order, regardless of collapse state", () => {
+    const ws = [makeWorkspace("w1", "r-a"), makeWorkspace("w2", "r-b"), makeWorkspace("w3", "r-a")];
+    const tree = buildGroupTree(ws, repos, [], [], ["repo"]);
+    // Repo grouping orders by repo name (alpha, bravo). Within each leaf,
+    // workspaces appear in their input order.
+    expect(flattenWorkspaceOrder(tree)).toEqual(["w1", "w3", "w2"]);
+  });
+
+  it("walks nested groups depth-first (repo → status)", () => {
+    const dirty = makeWorkspace("w-dirty", "r-a", { dirty: true });
+    const idle = makeWorkspace("w-idle", "r-a");
+    const otherIdle = makeWorkspace("w-bravo-idle", "r-b");
+    const tree = buildGroupTree([idle, dirty, otherIdle], repos, [], [], ["repo", "status"]);
+    // Within repo=alpha: status order is dirty before idle (per SECTION_ORDER).
+    expect(flattenWorkspaceOrder(tree)).toEqual(["w-dirty", "w-idle", "w-bravo-idle"]);
+  });
+});
+
+describe("findGroupPathForWorkspace", () => {
+  const repoA = makeRepo("r-a", "alpha");
+  const repoB = makeRepo("r-b", "bravo");
+  const repos = [repoA, repoB];
+
+  it("returns null when the tree is empty (grouping = none)", () => {
+    expect(findGroupPathForWorkspace([], "w1")).toBeNull();
+  });
+
+  it("returns null when the workspace is not found in the tree", () => {
+    const tree = buildGroupTree([makeWorkspace("w1", "r-a")], repos, [], [], ["repo"]);
+    expect(findGroupPathForWorkspace(tree, "missing")).toBeNull();
+  });
+
+  it("returns the leaf path containing the workspace (single-level grouping)", () => {
+    const tree = buildGroupTree([makeWorkspace("w1", "r-a"), makeWorkspace("w2", "r-b")], repos, [], [], ["repo"]);
+    expect(findGroupPathForWorkspace(tree, "w2")).toBe("repo=bravo");
+  });
+
+  it("returns the deepest enclosing leaf path (two-level grouping)", () => {
+    const dirty = makeWorkspace("w-dirty", "r-a", { dirty: true });
+    const idle = makeWorkspace("w-idle", "r-a");
+    const tree = buildGroupTree([dirty, idle], repos, [], [], ["repo", "status"]);
+    expect(findGroupPathForWorkspace(tree, "w-dirty")).toBe("repo=alpha/status=dirty");
+    expect(findGroupPathForWorkspace(tree, "w-idle")).toBe("repo=alpha/status=idle");
   });
 });

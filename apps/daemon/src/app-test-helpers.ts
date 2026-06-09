@@ -20,12 +20,15 @@ export function createFixture(dirs: string[]) {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
+  config.terminal = { displayName: "Terminal", command: "bash", args: ["-l"] };
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  // Tests opt out of the background refresh job — they don't want a 15s tick
+  // (or the implied gh/jtk subprocesses) firing during their test runtime.
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 export function createGitRepo(dir: string) {
@@ -79,7 +82,8 @@ export function closeServer(server: http.Server) {
 
 export async function getJson<T>(url: string) {
   const response = await fetch(url);
-  expect(response.ok).toBe(true);
+  const text = await response.clone().text();
+  expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
 }
 

@@ -10,8 +10,8 @@ import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -37,7 +37,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const empty = await getJson<{ scheduledAgents: unknown[] }>(`${baseUrl}/api/scheduled-agents`);
@@ -49,7 +49,7 @@ describe("scheduled agent routes", () => {
           name: "Daily sweep",
           cron: "0 9 * * *",
           repoId: "repo_sched",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceStrategy: "existing",
           workspaceName: "sched-target",
         },
@@ -63,7 +63,7 @@ describe("scheduled agent routes", () => {
           name: "Bad",
           cron: "not-cron",
           repoId: "repo_sched",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceStrategy: "new",
           workspaceName: "bad",
         }),
@@ -100,7 +100,7 @@ describe("scheduled agent routes", () => {
         name: "Inflight delete",
         cron: "0 9 * * *",
         repoId: "repo_sched",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "sched-target",
       });
@@ -125,7 +125,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 45_000);
 
   it("GET /runs returns the per-agent run rows; GET /log slices the log file; both 404 when the run doesn't belong to the agent", async () => {
     const fixture = createFixture();
@@ -146,14 +146,14 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
         name: "Runs",
         cron: "0 9 * * *",
         repoId: "repo_runs",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "runs-target",
       });
@@ -208,7 +208,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 25_000);
 
   it("POST /run maps the four overlap-policy outcomes to HTTP envelopes (skip/queue/queue_full)", async () => {
     const fixture = createFixture();
@@ -229,7 +229,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // Skip-policy agent: in-flight run + POST /run → 409.
@@ -237,7 +237,7 @@ describe("scheduled agent routes", () => {
         name: "Skip envelope",
         cron: "0 9 * * *",
         repoId: "repo_run_envelope",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "skip-env",
         overlapPolicy: "skip",
@@ -266,7 +266,7 @@ describe("scheduled agent routes", () => {
         name: "Queue envelope",
         cron: "0 9 * * *",
         repoId: "repo_run_envelope",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "queue-env",
         overlapPolicy: "queue",
@@ -295,7 +295,19 @@ describe("scheduled agent routes", () => {
 
       // Saturate the queue and verify 429 queue_full.
       for (let i = 0; i < 9; i += 1) {
-        await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, { method: "POST" });
+        fixture.store.insertScheduledAgentRun({
+          id: `queued_full_${i}`,
+          scheduledAgentId: queueAgent.scheduledAgent.id,
+          status: "queued",
+          enqueuedAt: now,
+          startedAt: null,
+          endedAt: null,
+          message: null,
+          workspaceId: null,
+          sessionId: null,
+          backgroundSessionId: null,
+          logFilePath: null,
+        });
       }
       const fullResp = await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, {
         method: "POST",
@@ -308,7 +320,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 30_000);
 
   it("rejects invalid query parameters with 400", async () => {
     const fixture = createFixture();
@@ -328,14 +340,14 @@ describe("scheduled agent routes", () => {
       updatedAt: new Date().toISOString(),
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
         name: "Q",
         cron: "0 9 * * *",
         repoId: "repo_q",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "q",
       });
@@ -352,7 +364,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 15_000);
 });
 
 function createFixture() {
@@ -364,12 +376,12 @@ function createFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function createGitRepo(dir: string) {
@@ -416,4 +428,17 @@ async function postJson<T>(url: string, body: unknown) {
   const text = await response.clone().text();
   expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
+}
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }

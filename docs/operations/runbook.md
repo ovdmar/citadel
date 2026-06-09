@@ -21,7 +21,7 @@ Default SQLite database: `~/.local/share/citadel/citadel.sqlite`
 
 Set `CITADEL_DATA_DIR` or `CITADEL_CONFIG` to override local paths.
 
-See [config-reference.md](./config-reference.md) for providers, runtimes, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
+See [config-reference.md](./config-reference.md) for providers, agent runtimes, the terminal profile, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
 
 ## Verification
 
@@ -47,12 +47,12 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts:
+Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts. MCP is agent-only; it does not launch or list terminal workspace sessions.
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"shell","displayName":"Shell"}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"claude-code","displayName":"Investigate flaky CI"}}}'
 ```
 
 ### Reading agent output and sending follow-ups
@@ -63,7 +63,7 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agent_sessions","arguments":{}}}'
 
-# Read the latest terminal output (transcript) of a specific session,
+# Read the latest terminal output (transcript) of a specific agent session,
 # bounded by lines and maxChars so the response stays small.
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
@@ -88,39 +88,36 @@ curl -sS -X POST http://127.0.0.1:4337/api/agent-sessions/<sessionId>/messages \
 
 This surface is for trusted local/internal deployments. Do not bind it to a public interface without adding an explicit authorization layer and network controls.
 
-## Terminal Runbook (ttyd)
+## Terminal Runbook
 
-Interactive terminals in the cockpit are rendered by per-session `ttyd` processes that the daemon spawns, supervises, and reverse-proxies.
+Interactive terminals in the cockpit use Citadel's xterm.js WebSocket renderer. The browser connects to `/terminal/<sessionId>`, the daemon attaches a disposable node-pty `tmux attach-session` viewer to the durable tmux session, and terminal bytes stream directly between xterm.js and that PTY.
 
-**Required tools:** `tmux`, `ttyd`. The daemon resolves `ttyd` via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+**Required tools:** `tmux`. The PTY bridge is provided by the `node-pty` package built during `pnpm install`.
 
 **How it works:**
-- The cockpit calls `POST /api/agent-sessions/:sessionId/terminal` to ensure a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX`; when unset, each daemon gets a deterministic 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)` (11 disjoint slices in `7721..9920`). It binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
-- The daemon proxies all HTTP and WebSocket traffic at `/terminals/:sessionId/*` to the matching ttyd. The cockpit renders `<iframe src="/terminals/:sessionId/">`.
-- On daemon startup, any orphaned `ttyd` listening inside the configured port range is reaped (via `lsof -nP -iTCP -sTCP:LISTEN`).
-- Stopping a Citadel session (`DELETE /api/agent-sessions/:id`) releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases the ttyd without stopping the tmux session.
+- The cockpit opens `ws(s)://<host>/terminal/<sessionId>` for the renderer. No terminal iframe or external renderer process is created for normal workspace switching.
+- Input/output bytes move as binary WebSocket frames. JSON control messages are reserved for resize and error/exit notifications.
+- Closing or refreshing the browser pane kills only the disposable viewer process; the tmux session and agent continue.
+- Stopping a workspace session (`DELETE /api/workspace-sessions/:id`) kills the durable tmux session.
+- The terminal reaper periodically detaches orphaned tmux clients whose owning viewer process is gone.
 
 **Diagnostics:**
 
 ```bash
-# List active ttyd records the daemon is aware of
-curl -sS http://127.0.0.1:4010/api/terminals | jq
+# Verify daemon health
+curl -sS http://127.0.0.1:4010/api/health | jq
 
-# Ask the daemon to ensure a ttyd for a known session
-curl -sS -X POST http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal | jq
+# Inspect the daemon's terminal/tmux snapshot
+curl -sS http://127.0.0.1:4010/api/diagnostics/snapshot | jq '.tmuxLiveSessions, .sessions'
 
-# Forcefully release a stuck ttyd for a session
-curl -sS -X DELETE http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal
+# Read bounded pane output for a known session
+curl -sS 'http://127.0.0.1:4010/api/agent-sessions/<sessionId>/output?lines=120&maxChars=20000' | jq
 ```
 
 **Error codes** surfaced to the cockpit:
-- `ttyd_missing` — `TTYD_BIN` does not point at an executable ttyd. Install ttyd or update the path.
-- `no_free_port` — every port in the configured range is busy. Release stale terminals or widen the range.
-- `ttyd_start_timeout` — ttyd was spawned but never listened. Inspect daemon logs and verify the shell command exits cleanly.
 - `tmux_session_missing` — the underlying tmux session is gone (agent exited). Reconcile or recreate the session.
-- `spawn_failed` — Node could not spawn ttyd. Check permissions and shell binary.
+- `spawn_failed` — Node could not spawn the PTY-backed tmux attach viewer. Check tmux availability and daemon permissions.
 - `session_not_found` — Citadel does not know that session id. Refresh the cockpit.
+- `terminal_disconnected` / `terminal_socket_error` / `terminal_closed` — the browser viewer detached. Retry reconnects to the same tmux session if it still exists.
 
-**Diagnostic xterm gateway:** `/terminal/:sessionId` still exposes the legacy xterm/WebSocket bridge for tooling and tests. It is not used by the cockpit and is not the default renderer.
-
-**Trade-offs accepted:** one external ttyd process per active terminal, dynamic loopback ports, and a proxy hop, in exchange for unmodified terminal fidelity (alt-screen TUIs like Claude Code, full colour, cursor, shortcut passthrough, paste).
+**Trade-offs accepted:** Citadel owns a small node-pty bridge using xterm.js rather than delegating every cockpit pane to an external terminal server. This preserves native PTY behavior for interactive CLIs while removing per-session renderer RSS and iframe startup from normal navigation.

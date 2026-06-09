@@ -5,10 +5,10 @@ SHELL := /bin/bash
 #   1. Local iteration: `make deploy` (HMR foreground) or `make serve` (built,
 #      detached). Both bind to a derived port, write to a worktree-local data
 #      dir, and never touch the systemd-supervised long-term service.
-#   2. Long-term devbox install: `make install` (re)writes the user-systemd
-#      unit `citadel.service` to point at $(CURDIR) and brings it up. This is
-#      what you run once per machine — and again whenever you want to swap the
-#      long-running daemon to a different checkout.
+#   2. Long-term devbox install: `make install` resolves the requested install
+#      ref (latest release by default), (re)writes the user-systemd unit
+#      `citadel.service` to point at $(CURDIR), brings it up, and runs doctor.
+#      `make upgrade` is the same path under an operator-friendly verb.
 
 # Worktree-derived ports. cksum-mod-100 is deterministic per absolute path, so
 # `make deploy` from the same worktree always lands on the same ports. The
@@ -35,12 +35,25 @@ EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/nu
 # mock git repo materialized under $(WORKTREE_MOCK_REPO) plus synthetic rows
 # inserted into the worktree SQLite. It is intentionally isolated from the
 # systemd long-term daemon's prod data: seeding from prod would copy live
-# agent_sessions and the worktree daemon would race the live daemon for the
+# workspace_sessions and the worktree daemon would race the live daemon for the
 # same tmux sessions.
 WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
 WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
 
-.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
+CI_PORT                     ?= 4337
+CI_WEB_PORT                 ?= 5173
+CI_BASE_URL                 ?= http://127.0.0.1:$(CI_PORT)
+CI_DAEMON_URL               ?= http://127.0.0.1:$(CI_PORT)
+CI_WEB_URL                  ?= http://127.0.0.1:$(CI_WEB_PORT)
+CI_E2E_PROJECTS             ?= desktop tablet mobile
+CI_PLAYWRIGHT_INSTALL_ARGS  ?= --with-deps chromium
+CI_DEV_LOG                  ?= /tmp/citadel-dev.log
+CI_PLAYWRIGHT_DAEMON_LOG    ?= /tmp/citadel-playwright-daemon.log
+CI_CLEAN_ALL_TMUX           ?= 0
+
+.NOTPARALLEL: ci
+
+.PHONY: help setup ci remote-checks ci-host-tools ci-setup ci-static ci-unit ci-build ci-install-playwright ci-e2e ci-smoke ci-clean-tmux ci-dump-playwright-log ci-dump-dev-log deploy install upgrade doctor tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -54,13 +67,17 @@ help:
 	@echo "                     cockpit → http://localhost:$(EFFECTIVE_WEB_PORT) (vite, HMR)"
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
 	@echo ""
+	@echo "Distribution:"
+	@echo "  make install           Install/reinstall the latest released version."
+	@echo "  make upgrade           Upgrade/reinstall to the latest released version."
+	@echo "  make install REF=main  Install from latest origin/main instead of a release."
+	@echo "  make upgrade REF=v0.3.0  Pin the install to an exact annotated release tag."
+	@echo "  make doctor            Verify that everything is configured (binaries, daemon, config, hooks)."
+	@echo ""
 	@echo "Lifecycle:"
 	@echo "  make setup        pnpm install"
 	@echo "  make stop         Stop this worktree's deploy stack"
 	@echo "  make logs         Tail the deploy stack's combined log (daemon + vite)"
-	@echo "  make tmux-service Restart citadel-tmux.service (DESTRUCTIVE — kills live tmux sessions;"
-	@echo "                    boot-restore resumes them via claude --resume). Use only to apply"
-	@echo "                    tmux-unit changes or recover from an orphan tmux server."
 	@echo ""
 	@echo "Seeding (so a fresh worktree cockpit isn't empty):"
 	@echo "  make seed         Materialize the checked-in mock repo + insert fixture rows into"
@@ -70,13 +87,153 @@ help:
 	@echo "                    re-seed from scratch. Use for a clean QA baseline."
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check       typecheck + lint + test + build"
+	@echo "  make ci          Run every GitHub CI check locally (frozen install, static,"
+	@echo "                   coverage, build, e2e desktop/tablet/mobile, smoke, performance)"
+	@echo "  make check       typecheck + lint + coverage + build"
 	@echo "  make smoke       Local API smoke against a running daemon"
 	@echo "  make e2e         Playwright happy-path"
 	@echo "  make performance Local performance smoke"
 
 setup:
 	pnpm install
+
+remote-checks: ci
+
+ci: ci-host-tools ci-setup ci-static ci-unit ci-build ci-install-playwright ci-e2e ci-smoke
+
+ci-host-tools:
+	@missing=""; \
+	for bin in curl fuser git node pnpm setsid sqlite3 tmux; do \
+		if ! command -v "$$bin" >/dev/null 2>&1; then \
+			missing="$$missing $$bin"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing tools required by GitHub CI:$$missing"; \
+		exit 127; \
+	fi; \
+	node_major="$$(FORCE_COLOR=0 node -p 'Number(process.versions.node.split(".")[0])')"; \
+	if [ "$$node_major" -lt 24 ]; then \
+		echo "GitHub CI uses Node 24; found $$(node --version)"; \
+		exit 1; \
+	fi
+
+ci-setup: ci-host-tools
+	pnpm install --frozen-lockfile
+
+ci-static:
+	pnpm run check:arch
+	pnpm run check:size
+	pnpm run typecheck
+	pnpm run lint
+	pnpm run check:deps
+
+ci-unit: ci-host-tools
+	@set -e; \
+	cleanup() { status=$$?; trap - EXIT INT TERM; bash scripts/dev/ci-clean-tmux.sh; exit $$status; }; \
+	trap cleanup EXIT INT TERM; \
+	pnpm run coverage
+
+ci-build:
+	pnpm run build
+
+ci-install-playwright:
+	pnpm exec playwright install $(CI_PLAYWRIGHT_INSTALL_ARGS)
+
+ci-e2e: ci-host-tools ci-install-playwright
+	@set -e; \
+	dump_playwright_log() { \
+		echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+		cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+		echo "=== ss -tlnp ==="; \
+		ss -tlnp 2>/dev/null | head -20 || true; \
+		echo "=== ls .citadel ==="; \
+		ls -la .citadel 2>&1 || true; \
+	}; \
+	for project in $(CI_E2E_PROJECTS); do \
+		echo "Running e2e ($$project)"; \
+		( \
+			set -e; \
+			cleanup() { \
+				status=$$?; \
+				trap - EXIT INT TERM; \
+				bash scripts/dev/ci-clean-tmux.sh; \
+				if [ "$$status" -ne 0 ]; then dump_playwright_log; fi; \
+				exit "$$status"; \
+			}; \
+			trap cleanup EXIT INT TERM; \
+			pnpm e2e:isolated --project="$$project" --workers=1 \
+		); \
+	done
+
+ci-smoke: ci-host-tools ci-install-playwright
+	@set -e; \
+	rm -f "$(CI_DEV_LOG)"; \
+	dump_dev_log() { \
+		echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+		cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+		echo "=== $(CI_DEV_LOG) ==="; \
+		cat "$(CI_DEV_LOG)" || echo "(no dev log)"; \
+		echo "=== ss -tlnp ==="; \
+		ss -tlnp 2>/dev/null | head -20 || true; \
+		echo "=== ls .citadel ==="; \
+		ls -la .citadel 2>&1 || true; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ -n "$${dev_pgid:-}" ] && kill -0 -- "-$$dev_pgid" 2>/dev/null; then \
+			kill -TERM -- "-$$dev_pgid" 2>/dev/null || true; \
+			sleep 1; \
+			kill -KILL -- "-$$dev_pgid" 2>/dev/null || true; \
+		fi; \
+		bash scripts/dev/ci-clean-tmux.sh; \
+		if [ "$$status" -ne 0 ]; then dump_dev_log; fi; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	setsid env \
+		CITADEL_PORT="$(CI_PORT)" \
+		CITADEL_WEB_PORT="$(CI_WEB_PORT)" \
+		CITADEL_DAEMON_URL="$(CI_DAEMON_URL)" \
+		CITADEL_BASE_URL="$(CI_BASE_URL)" \
+		CITADEL_WEB_URL="$(CI_WEB_URL)" \
+		pnpm dev >"$(CI_DEV_LOG)" 2>&1 & \
+	dev_pgid="$$!"; \
+	for attempt in {1..60}; do \
+		if curl -fsS "$(CI_BASE_URL)/api/health" >/dev/null && curl -fsS "http://127.0.0.1:$(CI_WEB_PORT)" >/dev/null; then \
+			ready=1; \
+			break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ "$${ready:-0}" != "1" ]; then \
+		echo "CI smoke dev stack did not become ready"; \
+		exit 1; \
+	fi; \
+	CITADEL_BASE_URL="$(CI_BASE_URL)" pnpm smoke; \
+	CI=true CITADEL_BASE_URL="$(CI_BASE_URL)" CITADEL_WEB_URL="$(CI_WEB_URL)" pnpm performance
+
+ci-clean-tmux:
+	@bash scripts/dev/ci-clean-tmux.sh
+
+ci-dump-playwright-log:
+	@echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+	cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+	echo "=== ss -tlnp ==="; \
+	ss -tlnp 2>/dev/null | head -20 || true; \
+	echo "=== ls .citadel ==="; \
+	ls -la .citadel 2>&1 || true
+
+ci-dump-dev-log:
+	@echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+	cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+	echo "=== $(CI_DEV_LOG) ==="; \
+	cat "$(CI_DEV_LOG)" || echo "(no dev log)"; \
+	echo "=== ss -tlnp ==="; \
+	ss -tlnp 2>/dev/null | head -20 || true; \
+	echo "=== ls .citadel ==="; \
+	ls -la .citadel 2>&1 || true
 
 build:
 	pnpm build
@@ -100,7 +257,7 @@ e2e:
 	pnpm e2e
 
 smoke:
-	pnpm smoke
+	CITADEL_BASE_URL="$${CITADEL_BASE_URL:-http://127.0.0.1:$(EFFECTIVE_PORT)}" pnpm smoke
 
 performance:
 	pnpm performance
@@ -210,23 +367,28 @@ deploy:
 		tail -n 40 $(WORKTREE_LOG); \
 		exit 1
 
-# `make install` is for users (or your devbox). Writes a user-systemd unit
-# pointing at THIS checkout and brings it up. Idempotent: re-run after a
-# `git pull` on the long-term checkout, or to swap the supervised daemon to a
-# different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
+# `make install` is for users (or your devbox). Resolves the install ref
+# (latest release by default, REF=main for origin/main, REF=vX.Y.Z for an
+# exact release), writes a user-systemd unit pointing at THIS checkout, brings
+# it up, and runs doctor. Does NOT touch any worktree-local `deploy` stack.
 #
-# Critically: `make install` never restarts citadel-tmux.service. tmux is the
-# substrate every live agent session lives in; restarting it kills them all.
-# Apply tmux-unit changes via `make tmux-service` instead.
 install:
-	@bash scripts/install-systemd.sh
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
 
-# `make tmux-service` is the destructive sibling: (re)starts
-# citadel-tmux.service, killing every live tmux session on the citadel
-# socket. Used to apply tmux-unit changes or recover from an orphan-server
-# condition. Boot-restore resumes recoverable agents via `claude --resume`.
+# Dedicated upgrade verb. Same end-state as `make install`, but with a
+# named entry point that operators recognise + REF= pinning.
+upgrade:
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
+
+# Verify everything is configured. Outputs a human-readable table by
+# default; pass `make doctor --json` to get machine-readable JSON.
+doctor:
+	@pnpm exec tsx scripts/doctor/run.ts $(filter-out $@,$(MAKECMDGOALS))
+
+# Legacy no-op. Citadel now uses one tmux server per workspace, created on
+# demand by tmux, so there is no separate citadel-tmux.service to maintain.
 tmux-service:
-	@bash scripts/restart-tmux-service.sh
+	@echo "citadel-tmux.service is deprecated; workspace tmux servers are created on demand."
 
 # `make stop` kills the detached `deploy` stack (daemon + vite, single pgid).
 # Doesn't touch the systemd unit (use `systemctl --user stop citadel.service`).
@@ -249,12 +411,12 @@ logs:
 	@tail -n 80 -f $(WORKTREE_LOG)
 
 # `make seed` materializes the checked-in fixture: a mock git repo at
-# $(WORKTREE_MOCK_REPO) (+ two mock worktrees under $(WORKTREE_MOCK_WORKTREES))
-# and a small set of synthetic rows in this worktree's SQLite. Idempotent — if
-# either piece is already in place, that piece is skipped. `make deploy`
-# auto-runs this on a fresh worktree so the cockpit isn't empty.
+# $(WORKTREE_MOCK_REPO) (+ demo worktrees under $(WORKTREE_MOCK_WORKTREES))
+# and synthetic rows in this worktree's SQLite. Idempotent — if either piece is
+# already in place, that piece is skipped. `make deploy` auto-runs this on a
+# fresh worktree so the cockpit isn't empty.
 #
-# Why not snapshot from prod: prod data carries live agent_sessions rows that
+# Why not snapshot from prod: prod data carries live workspace_sessions rows that
 # reference tmux sessions owned by the systemd long-term daemon. A worktree
 # daemon booted on that data races/steals those sessions, breaking the live
 # cockpit. The seed here is fully synthetic and references only paths inside

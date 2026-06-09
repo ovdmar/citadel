@@ -21,9 +21,10 @@ function buildFixture(dir: string) {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
+  config.terminal = { displayName: "Terminal", command: "bash", args: ["-l"] };
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store };

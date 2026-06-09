@@ -11,7 +11,7 @@
 [~] 3. Citadel targets Node.js 24+.
 [~] 4. Citadel uses ESM modules.
 [ ] 5. The first supported runtime is direct local Linux host install.
-[ ] 6. Required local tools are git, tmux, and `ttyd` (browser terminal renderer). The daemon resolves ttyd via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+[~] 6. Required local tools are git and native PTY support through `node-pty`. Tmux remains a supported migration/fallback dependency for legacy terminal sessions. Browser terminal attach uses the in-process daemon WebSocket bridge plus either legacy tmux attach or the Citadel PTY daemon; no separate terminal renderer binary is required.
 [ ] 7. Optional shell-backed providers rely on their own installed CLIs and auth.
 
 ## Applications
@@ -19,7 +19,7 @@
 [~] 1. apps/daemon is the local Citadel daemon.
 [~] 2. apps/web is the browser operator cockpit.
 [~] 3. apps/cli is reserved for thin local helpers.
-[ ] 4. The daemon is the owner of filesystem, git, tmux, operations, providers, hooks, persistence, terminal routing, and MCP.
+[ ] 4. The daemon is the owner of filesystem, git, operations, providers, hooks, persistence, terminal routing, MCP, and terminal backend adoption. A separate PTY daemon may own long-running PTY processes; tmux remains owned for legacy/fallback sessions.
 [ ] 5. The web app is a client over typed contracts and daemon APIs.
 [ ] 6. Future desktop, CLI, and MCP clients use the same daemon product boundary.
 
@@ -29,7 +29,7 @@
 [~] 2. The web app uses Vite.
 [~] 3. The web app uses TanStack Router for routing.
 [~] 4. The web app uses TanStack Query for server state.
-[~] 5. The web app embeds the daemon-proxied ttyd renderer via `<iframe>` for interactive terminals. xterm.js is no longer a browser dependency.
+[~] 5. The web app renders interactive terminals with xterm.js over the daemon WebSocket at `/terminal/:sessionId`. It does not mount terminal iframes during normal cockpit navigation.
 [~] 6. The web app uses lucide-react for icons.
 [~] 7. shadcn-style UI is built with local components, Radix primitives where useful, class-variance-authority, clsx, tailwind-merge, and Tailwind CSS.
 [ ] 8. Shared UI components live in packages/ui only when reuse is real.
@@ -40,7 +40,7 @@
 [~] 1. The daemon uses Express for HTTP APIs.
 [~] 2. The daemon uses REST for commands and snapshots.
 [~] 3. The daemon uses SSE for app-state/events.
-[~] 4. The daemon proxies interactive terminal I/O. Browser terminals are served by per-session `ttyd` processes (bound to `127.0.0.1`, dynamic loopback ports in a configurable range), routed through the daemon at `/terminals/:sessionId/*` for both HTTP assets and WebSocket upgrades, using `http-proxy`. A diagnostic xterm/WebSocket gateway (`/terminal/:sessionId`) remains available for tooling but is not the default renderer.
+[~] 4. The daemon serves interactive terminal I/O through `/terminal/:sessionId` WebSocket upgrades. Legacy tmux-backed rows attach through node-pty running `tmux attach-session`; PTY-daemon-backed rows bridge over a private Unix socket to a long-running PTY owner process. Terminal bytes move as binary frames; JSON is used for control messages.
 [~] 5. The daemon uses Zod-backed contracts for shared request/response/event schemas.
 [ ] 6. Long-running or side-effectful work is represented as operations.
 [ ] 7. Terminal transport remains separate from app-state transport.
@@ -49,21 +49,23 @@
 ## Persistence And Config
 
 [~] 1. SQLite is the mutable local state baseline.
-[ ] 2. SQLite owns repositories, workspaces, operations, activity, sessions, provider health snapshots, UI preferences, and runtime state.
-[ ] 3. Config files own static defaults, providers, runtimes, hooks, repo defaults, and command policy.
+[ ] 2. SQLite owns repositories, workspace roots, workspace checkouts, operations, activity, workspace sessions, provider health snapshots, plan versions, manager state/events, review artifacts, UI preferences, and runtime state.
+[ ] 3. Config files own static defaults, providers, runtime definitions, terminal profile, hooks, repo defaults, command policy, and may own editable predefined role/action templates when boot-safe. DB-backed template storage is also acceptable.
 [ ] 4. Migrations are forward-only for the initial local-first baseline.
 [ ] 5. Backup/restore is the rollback strategy for local data.
+[ ] 6. Workspace schema migration is append-only in spirit: add `workspaces.root_path`/`mode`, keep `workspaces.path` as legacy primary-checkout compatibility until all callers use typed accessors, and create child tables for checkouts/plans/managers/review artifacts.
+[ ] 7. Manager orchestration schema additions are append-only in spirit: delivery-unit snapshots, dependency edges, manager action ledger, durable issue facts, transition attempts, durable checkout PR/check facts, agent tool authorities, review invalidation/waiver fields, and checkout delivery-unit identity are additive migrations with nullable compatibility for existing workspaces.
 
 ## Terminal And Runtime Stack
 
-[~] 1. Agent runtimes launch through tmux.
-[~] 2. Citadel persists tmux session identity.
-[~] 3. Browser attach/reconnect is owned by packages/terminal: ttyd lifecycle (spawn, port reservation, readiness wait, stale cleanup, release) lives in `packages/terminal/src/ttyd.ts`, and a diagnostic xterm gateway stays in `index.ts`.
-[~] 4. Browser terminal traffic is scoped by session ID through the `/terminals/:sessionId/*` proxy path. Stale ttyd processes inside the configured port range are reaped on daemon startup.
-[ ] 5. The cockpit shows an explicit, actionable error (`ttyd_missing`, `no_free_port`, `ttyd_start_timeout`, `tmux_session_missing`, `spawn_failed`, `session_not_found`) when a terminal cannot be served — never a blank black surface.
-[ ] 6. Runtime adapters live behind capability-based contracts.
+[~] 1. Agent runtimes launch through a backend-owned terminal session using the configured terminal profile as the base shell. During migration this can be a legacy tmux pane or a PTY-daemon-owned node-pty session.
+[~] 2. Citadel persists terminal backend identity. Tmux-backed rows persist tmux session identity; PTY-daemon-backed rows persist PTY session and owner socket identity.
+[~] 3. Browser attach/reconnect is owned by packages/terminal: the xterm/WebSocket bridge uses node-pty `tmux attach-session` for legacy rows and a Unix-socket PTY-daemon client for PTY-daemon rows at `/terminal/:sessionId`.
+[~] 4. Browser terminal traffic is scoped by session ID through `/terminal/:sessionId` WebSocket upgrades; there is no daemon-managed per-session terminal renderer process or secondary proxy route.
+[~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `pty_session_missing`, `pty_owner_missing`, `terminal_unavailable`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
+[ ] 6. Agent runtime adapters live behind capability-based contracts.
 [ ] 7. Runtime health is visible before session start.
-[ ] 8. Trade-offs of using ttyd as renderer (external process per session, dynamic local ports, proxy hop) are accepted in exchange for unmodified terminal fidelity.
+[~] 8. Trade-offs of using xterm.js over node-pty are accepted: Citadel owns the bridge, but preserves real PTY semantics while avoiding per-session external renderer processes for normal navigation. Tmux attach remains a compatibility backend until PTY-daemon coverage and migration gates pass.
 
 ## Package Boundaries
 
@@ -72,12 +74,16 @@
 [~] 3. packages/config contains versioned config loading and validation.
 [~] 4. packages/db contains SQLite schema, migrations, repositories, and transaction helpers.
 [~] 5. packages/operations contains side-effectful workflows.
-[~] 6. packages/terminal contains the tmux gateway, the ttyd manager (port allocation, spawn, readiness, stale cleanup), and the diagnostic WebSocket protocol.
+[~] 6. packages/terminal contains terminal backend adapters, the legacy tmux gateway, the PTY-daemon client/gateway, input helpers, capture utilities, and pane/log lifecycle helpers.
 [~] 7. packages/runtimes contains agent runtime provider contracts and adapters.
 [~] 8. packages/providers contains version-control, PR, CI, issue tracker, usage, and notification providers.
 [~] 9. packages/hooks contains hook contracts, command execution, and event dispatch.
 [~] 10. packages/mcp contains MCP tools/resources over normalized Citadel concepts.
 [~] 11. packages/testing contains fixtures, fake providers/runtimes, and e2e helpers.
+[ ] 12. Workspace and checkout path helpers expose typed accessors (`workspaceRootPath`, `checkoutPath`, `executionTargetCwd`) so callers do not reinterpret legacy `workspaces.path`.
+[ ] 13. Manager reducers, gate reducers, stack planners, and migration planners live in pure packages where practical; daemon route/MCP modules wire them to persistence, providers, terminal, and operations.
+[ ] 14. Plan parsing, gate derivation, stack planning, structured launch-option derivation, and manager decision reducers are pure logic. They do not import filesystem, process, HTTP, React, DB, providers, terminal, daemon, or MCP modules.
+[ ] 15. apps/web consumes daemon-provided structured state and shared contracts/core helpers only. It does not duplicate daemon launch preconditions or import daemon internals.
 
 ## Provider And Hook Stack
 
@@ -108,6 +114,25 @@
 [ ] 4. Existing stack choices are extended before introducing parallel frameworks.
 [ ] 5. Framework swaps require explicit product/architecture approval.
 
+## Distribution
+
+[ ] 1. Citadel ships as a versioned source checkout, not a published binary or package — the systemd unit references `apps/daemon/dist/index.js` directly out of the install root.
+[ ] 2. Versions are pinned via annotated git tags shaped `v<major>.<minor>.<patch>`. Lightweight tags, arbitrary branches, and SHAs are not valid install targets.
+[ ] 3. `make install` and `make upgrade` default to the latest stable annotated `vX.Y.Z` tag advertised by `origin`, sorted numerically and ignoring malformed/prerelease tags. Default resolution requires network access and never trusts local-only tags.
+[ ] 4. `make install REF=main` and `make upgrade REF=main` fetch and check out exactly `origin/main` for development/bootstrap installs. `make install REF=vX.Y.Z` and `make upgrade REF=vX.Y.Z` install the exact annotated tag, using a local annotated tag only when the best-effort origin tag fetch fails. Any other `REF` is rejected.
+[ ] 4a. `make install` is self-contained after `git clone`: resolve ref, run `pnpm install --frozen-lockfile`, build, write systemd units, restart, then verify with `make doctor`. `make upgrade` is the same behavior with clearer operator wording.
+[ ] 5. Both install and upgrade refuse to run from a checkout whose path differs from the `WorkingDirectory=` line of the installed `~/.config/systemd/user/citadel.service`.
+[ ] 6. Each tag pushed to GitHub triggers `.github/workflows/release.yml`, which runs `make check` *before* `gh release create`. A failing check blocks release publication; the operator deletes the tag (`git push --delete origin v<x.y.z>`) and re-cuts after fixing.
+[ ] 7. `CHANGELOG.md` is reverse-chronological; each release lists what changed plus a "Known gaps" section for deferred items.
+
+## HTTP And HTTPS
+
+[ ] 1. The daemon binds plain HTTP on `127.0.0.1` by default. This is the supported, encouraged configuration for local-first use.
+[ ] 2. Operators can opt into HTTPS by setting `config.tls = { certPath, keyPath }`. Both paths must be absolute, both files must exist and be non-zero bytes, and the cert must not be expired. Validation runs at daemon boot — misconfiguration causes a fail-fast exit, not a runtime crash.
+[ ] 3. Citadel is *not* a reverse-proxy replacement. HTTPS is in-process and intended for operators who explicitly bind a non-loopback host (LAN exposure, Tailscale, etc.) or want to test TLS locally via mkcert.
+[ ] 4. The doctor and the boot log warn when `bindHost` is non-loopback AND `config.tls` is absent — never the inverse (mkcert + 127.0.0.1 is a normal pattern).
+[ ] 5. WebSocket transports (terminal proxy, diagnostic gateway) function identically over `wss://` when TLS is active.
+
 ---
 
-keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, tmux, ttyd, reverse proxy, http-proxy, websocket, sse, zod, biome, vitest, playwright
+keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, pty daemon, tmux, node-pty, xterm, websocket, sse, zod, biome, vitest, playwright

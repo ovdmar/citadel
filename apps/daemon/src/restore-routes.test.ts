@@ -12,7 +12,7 @@ import { collectRestoreCandidates } from "./restore-routes.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -28,7 +28,7 @@ function makeFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
   const store = new SqliteStore(config.databasePath);
   store.migrate();
@@ -174,7 +174,7 @@ describe("restore routes — absorb empty Claude pane", () => {
       `{"type":"permission-mode","permissionMode":"auto","sessionId":"uuid-empty"}`,
     ]);
 
-    const { server } = createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
+    const { server } = await createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{ absorbed: string[]; restoredFrom: string }>(`${baseUrl}/api/restore/run`, {
@@ -240,7 +240,7 @@ describe("restore routes — absorb empty Claude pane", () => {
       `{"parentUuid":null,"isSidechain":false,"promptId":"p1","type":"user","message":{"role":"user","content":"hello"},"uuid":"u1","timestamp":"${ts}"}`,
     ]);
 
-    const { server } = createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
+    const { server } = await createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{ absorbed: string[] }>(`${baseUrl}/api/restore/run`, {
@@ -284,7 +284,7 @@ describe("restore routes — source row cleanup", () => {
       createdAt: ts,
       updatedAt: ts,
     });
-    const { server } = createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
+    const { server } = await createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{ restoredFrom: string }>(`${baseUrl}/api/restore/run`, {

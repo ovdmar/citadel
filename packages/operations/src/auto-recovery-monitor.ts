@@ -51,6 +51,12 @@ export type AutoRecoveryMonitorDeps = {
   idleThresholdMs: number;
   debounceMs: number;
   disabled: boolean;
+  readKnobs?: () => { idleThresholdMs: number; debounceMs: number; disabled: boolean };
+  // Optional runtime resolver. The daemon uses this to health-gate the
+  // configured primary/fallback runtime before this pure monitor attempts a
+  // spawn. Omitted keeps the older first-non-shell behavior for tests and
+  // non-daemon callers.
+  resolveRuntimeId?: () => string | null;
   // Optional gate consulted at the top of each tick. When provided and it
   // returns false, the entire tick short-circuits — no provider calls, no
   // decide invocations, no agent spawn. Used by the daemon's viewer-gate to
@@ -72,11 +78,14 @@ function mostRecent(...values: Array<string | null | undefined>): string | null 
   return best;
 }
 
-// Resolve the auto-recovery runtime for a workspace: pick the first
-// non-shell runtime configured. Operators that configure only a shell
-// runtime opt out of auto-recovery — there's no agent to ping.
+// Resolve the auto-recovery runtime for a workspace: pick a configured agent runtime.
 function pickRuntime(config: CitadelConfig): string | null {
-  const runtime = config.runtimes.find((candidate) => candidate.id !== "shell");
+  const configured = config.automations?.fixCi;
+  const runtimeIds = new Set(config.agentRuntimes.map((candidate) => candidate.id));
+  for (const id of [configured?.runtimeId, configured?.fallbackRuntimeId ?? undefined]) {
+    if (id && runtimeIds.has(id)) return id;
+  }
+  const runtime = config.agentRuntimes[0];
   return runtime?.id ?? null;
 }
 
@@ -84,9 +93,14 @@ function pickRuntime(config: CitadelConfig): string | null {
 // AND the atomic UPDATE claims the slot) spawn the agent. Exported as its
 // own function so tests can drive it directly without setInterval.
 export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Date = new Date()): Promise<void> {
-  if (deps.disabled) return;
+  const knobs = deps.readKnobs?.() ?? {
+    idleThresholdMs: deps.idleThresholdMs,
+    debounceMs: deps.debounceMs,
+    disabled: deps.disabled,
+  };
+  if (knobs.disabled) return;
   if (deps.shouldRun && !deps.shouldRun()) return;
-  const runtimeId = pickRuntime(deps.config);
+  const runtimeId = deps.resolveRuntimeId ? deps.resolveRuntimeId() : pickRuntime(deps.config);
   if (!runtimeId) return;
 
   const workspaces = deps.store.listWorkspaces();
@@ -137,14 +151,14 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
       },
       runtimeId,
       now,
-      idleThresholdMs: deps.idleThresholdMs,
-      debounceMs: deps.debounceMs,
-      disabled: deps.disabled,
+      idleThresholdMs: knobs.idleThresholdMs,
+      debounceMs: knobs.debounceMs,
+      disabled: knobs.disabled,
     });
     deps.onEvent?.({ workspaceId: workspace.id, reason: decision.reason, fired: decision.fire });
     if (!decision.fire || !decision.sha) continue;
 
-    const debounceCutoff = new Date(now.getTime() - deps.debounceMs).toISOString();
+    const debounceCutoff = new Date(now.getTime() - knobs.debounceMs).toISOString();
     const claimed = deps.store.tryRecordAutoRecoveryAttempt({
       workspaceId: workspace.id,
       sha: decision.sha,
@@ -168,10 +182,21 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
 
 export function startAutoRecoveryMonitor(
   deps: AutoRecoveryMonitorDeps,
-  intervalMs = 60_000,
+  intervalMs: number | (() => number) = 60_000,
 ): AutoRecoveryMonitorHandle {
   let running = false;
-  const handle = setInterval(() => {
+  let stopped = false;
+  let handle: ReturnType<typeof setTimeout> | null = null;
+  const readInterval = () => Math.max(1000, typeof intervalMs === "function" ? intervalMs() : intervalMs);
+  const schedule = () => {
+    if (stopped) return;
+    handle = setTimeout(tick, readInterval());
+    if (typeof (handle as { unref?: () => void }).unref === "function") {
+      (handle as { unref: () => void }).unref();
+    }
+  };
+  const tick = () => {
+    if (stopped) return;
     if (running) return;
     running = true;
     runAutoRecoveryTick(deps)
@@ -181,10 +206,14 @@ export function startAutoRecoveryMonitor(
       })
       .finally(() => {
         running = false;
+        schedule();
       });
-  }, intervalMs);
-  if (typeof (handle as { unref?: () => void }).unref === "function") {
-    (handle as { unref: () => void }).unref();
-  }
-  return { stop: () => clearInterval(handle) };
+  };
+  schedule();
+  return {
+    stop: () => {
+      stopped = true;
+      if (handle) clearTimeout(handle);
+    },
+  };
 }
