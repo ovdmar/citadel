@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { WorkspaceSession } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
@@ -133,6 +134,7 @@ describe("createAgentSession session-id wiring", () => {
       expect(store.listWorkspaceSessions(created.workspaceId).find((s) => s.id === session.id)).toMatchObject({
         kind: "terminal",
         runtimeId: null,
+        terminalBackend: "pty-daemon",
       });
       expect(store.listActivity(created.workspaceId).find((event) => event.type === "terminal.started")).toBeDefined();
       expect(store.listActivity(created.workspaceId).find((event) => event.type === "agent.started")).toBeUndefined();
@@ -141,9 +143,9 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
-  it("creates feature-flagged PTY-daemon terminal rows without spawning tmux", async () => {
+  it("creates PTY-daemon terminal rows by default without spawning tmux", async () => {
     const previous = process.env.CITADEL_TERMINAL_BACKEND;
-    process.env.CITADEL_TERMINAL_BACKEND = "pty-daemon";
+    Reflect.deleteProperty(process.env, "CITADEL_TERMINAL_BACKEND");
     try {
       const fixture = createGitFixture();
       const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -170,6 +172,71 @@ describe("createAgentSession session-id wiring", () => {
       if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TERMINAL_BACKEND");
       else process.env.CITADEL_TERMINAL_BACKEND = previous;
     }
+  });
+
+  it("keeps legacy tmux available only through the explicit rollback env", async () => {
+    const previous = process.env.CITADEL_TERMINAL_BACKEND;
+    process.env.CITADEL_TERMINAL_BACKEND = "tmux";
+    try {
+      const fixture = createGitFixture();
+      const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+      store.migrate();
+      const service = makeService(store);
+      const repo = service.registerRepo({ rootPath: fixture.repoPath });
+      const created = await service.createWorkspace({ repoId: repo.id, name: "terminal-tmux", source: "scratch" });
+
+      const session = await service.createTerminalSession({ workspaceId: created.workspaceId });
+      try {
+        expect(session).toMatchObject({
+          kind: "terminal",
+          runtimeId: null,
+          terminalBackend: "tmux",
+          tmuxSessionName: expect.any(String),
+          ptySessionId: null,
+        });
+      } finally {
+        service.stopWorkspaceSession({ sessionId: session.id });
+      }
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TERMINAL_BACKEND");
+      else process.env.CITADEL_TERMINAL_BACKEND = previous;
+    }
+  }, 15_000);
+
+  it("asks the PTY owner to close a PTY-daemon session before clearing row ownership", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const closed: WorkspaceSession[] = [];
+    const service = makeService(store, undefined, {
+      closePtySession: (session) => {
+        closed.push(session);
+      },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "terminal-close-pty", source: "scratch" });
+    const session = await service.createTerminalSession({ workspaceId: created.workspaceId });
+    store.updateWorkspaceSessionTerminalOwner(session.id, {
+      ptySessionId: "pty-owned",
+      ptyOwnerSocket: "/tmp/citadel-test-pty.sock",
+      ptyOwnerPid: 123,
+      ptyLastSeenAt: new Date().toISOString(),
+    });
+
+    service.stopWorkspaceSession({ sessionId: session.id });
+
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      id: session.id,
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty-owned",
+      ptyOwnerSocket: "/tmp/citadel-test-pty.sock",
+    });
+    expect(store.listWorkspaceSessions(created.workspaceId).find((s) => s.id === session.id)).toMatchObject({
+      status: "stopped",
+      ptySessionId: null,
+      ptyOwnerSocket: null,
+    });
   });
 
   it("passes Codex initial prompts as positional argv instead of pasting into the TUI", async () => {
@@ -421,7 +488,10 @@ describe("createAgentSession session-id wiring", () => {
 function makeService(
   store: SqliteStore,
   dataDir?: string,
-  overrides: { agentSessions?: { baseSystemPrompt: string } } = {},
+  overrides: {
+    agentSessions?: { baseSystemPrompt: string };
+    closePtySession?: (session: WorkspaceSession) => Promise<void> | void;
+  } = {},
 ) {
   return new OperationService(store, {
     ...(dataDir ? { dataDir } : {}),

@@ -450,8 +450,26 @@
   min-width: 0;
   padding: 0 7px;
   border-left: 0.5px solid var(--c-line-2);
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.cit-bb-metric--hoverable {
+  height: 22px;
+  cursor: default;
+}
+
+.cit-bb-metric--hoverable:hover,
+.cit-bb-metric--hoverable:focus-visible,
+.cit-bb-metric--active {
+  background: var(--c-elev);
+  outline: 0;
 }
 
 .cit-bb-metric-label {

@@ -131,7 +131,12 @@ describe("runWorkspaceHooks — config + file hook ordering", () => {
 
   it("dispatches .prompt hooks with event-specific payload and returns hook count", async () => {
     const ws = tmpWorkspace();
-    writeFileHook(ws, "pr.merge", "notify.prompt", "Merge PR #{{pullRequest.number}} with {{strategy}}\n");
+    writeFileHook(
+      ws,
+      "pr.merge",
+      "notify.prompt",
+      "Merge PR #{{pullRequest.number}} with {{strategy}} admin={{admin}}\n",
+    );
 
     const dispatchAgentHook = vi.fn().mockResolvedValue({ sessionId: "agent_session_prompt" });
     const activity = vi.fn();
@@ -144,13 +149,13 @@ describe("runWorkspaceHooks — config + file hook ordering", () => {
       repo: baseRepo,
       workspace: baseWorkspace(ws),
       operationId: "op_merge",
-      payload: { strategy: "squash", pullRequest: { number: 42 } },
+      payload: { strategy: "squash", admin: true, pullRequest: { number: 42 } },
       dispatchAgentHook,
     });
 
     expect(result.ran).toBe(1);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
-    expect(dispatchAgentHook.mock.calls[0]?.[0]?.prompt).toBe("Merge PR #42 with squash\n");
+    expect(dispatchAgentHook.mock.calls[0]?.[0]?.prompt).toBe("Merge PR #42 with squash admin=true\n");
   });
 
   it("when dispatcher rejects, records hook.<event>.failed activity and continues to the next hook", async () => {

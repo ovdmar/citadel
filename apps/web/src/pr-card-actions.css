@@ -111,7 +111,44 @@
   white-space: nowrap;
 }
 
-.pr-card-merge-strategy:hover {
+.pr-card-merge-admin {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--c-line-2);
+  padding: 6px 9px 7px;
+  font-size: 11px;
+  color: var(--c-fg-2);
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+}
+
+.pr-card-merge-admin[aria-checked="true"] {
+  color: oklch(58% 0.18 35);
+  background: oklch(60% 0.16 35 / 0.12);
+}
+
+.pr-card-merge-admin-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.1;
+}
+
+.pr-card-merge-admin-text span:first-child {
+  font-weight: 700;
+}
+
+.pr-card-merge-admin-text span:last-child {
+  color: var(--c-fg-4);
+  font-size: 9.5px;
+}
+
+.pr-card-merge-strategy:hover,
+.pr-card-merge-admin:hover {
   background: var(--c-line-2);
 }
 

@@ -52,7 +52,7 @@ Agent runtimes are prompt-driven command adapters launched through tmux:
 }
 ```
 
-Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
+Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. New plain shell terminal sessions use the low-latency PTY daemon backend by default; set `CITADEL_TERMINAL_BACKEND=tmux` only as a legacy rollback for new shell terminals. Existing tmux-backed workspace sessions keep their persisted tmux session name/id until closed. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Agent runtime health is derived from command availability.
 
 `agentSessions.baseSystemPrompt` is a single global prompt prefix configured from Settings -> Agents. Freestyle agent sessions use it as their system prompt. Specialized role sessions receive the global base prompt first and the Agents-tab role template system prompt second. Public API/MCP callers may provide supplemental system-prompt text for their own launch, but they cannot suppress the global base prompt or provide trusted role/source metadata.
 
@@ -253,6 +253,9 @@ Environment variables:
 - `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
 - `CITADEL_TMUX_HISTORY_LIMIT` — tmux scrollback lines per pane (default `20000`, clamped to `1000`-`100000`).
 - `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
+- `CITADEL_AGENT_LOW_PRIORITY` — set to `0`, `false`, `no`, or `off` to disable the default low-priority wrapper for agent runtimes.
+- `CITADEL_AGENT_IONICE` — set to `off` to skip `ionice -c3`; by default Citadel uses it when available so agent disk IO yields to interactive work.
+- `CITADEL_AGENT_NICE` — agent niceness value, default `10`, clamped to `0`-`19`.
 
 Lifecycle:
 

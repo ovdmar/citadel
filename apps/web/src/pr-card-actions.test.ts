@@ -5,15 +5,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PrCardActionSlot, mergeDisabledReason } from "./pr-card-actions.js";
 
 const roots: Root[] = [];
+const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   flushSync(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  document.body.innerHTML = "";
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
 });
 
 describe("mergeDisabledReason", () => {
@@ -94,9 +98,105 @@ describe("PrCardActionSlot", () => {
     expect(tooltip?.getAttribute("title")).toBe("PR mergeability is unknown; refresh to recheck");
     expect(button?.getAttribute("title")).toBe("PR mergeability is unknown; refresh to recheck");
   });
+
+  it("renders admin bypass unchecked and sends admin merge payload only when checked", async () => {
+    const fetchMock = installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"] });
+
+    await openMergeMenu(harness.container);
+    const bypass = adminBypassItem(harness.container);
+    expect(bypass.getAttribute("aria-checked")).toBe("false");
+    expect(bypass.textContent).toContain("Admin bypass");
+
+    await flushReact(() => bypass.click());
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("true");
+    await clickStrategy(harness.container, "Squash & merge");
+
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash", admin: true }]);
+  });
+
+  it("resets admin bypass when the merge menu closes and reopens", async () => {
+    installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"] });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    await openMergeMenu(harness.container);
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("resets admin bypass when the PR context changes", async () => {
+    installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"], number: 42 });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    harness.rerender({ allowedMergeStrategies: ["squash"], number: 43 });
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("resets admin bypass when the workspace changes with the same PR number", async () => {
+    const fetchMock = installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"], number: 42 }, { id: "ws_a" });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    harness.rerender({ allowedMergeStrategies: ["squash"], number: 42 }, { id: "ws_b" });
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash" }]);
+    expect(mergePaths(fetchMock)).toEqual(["/api/workspaces/ws_b/pr-merge"]);
+  });
+
+  it("clears admin bypass when merge eligibility hides the menu", async () => {
+    const fetchMock = installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"], mergeable: "mergeable" });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    harness.rerender({ allowedMergeStrategies: ["squash"], mergeable: "unknown" });
+    await flushReact(() => undefined);
+    expect(harness.container.querySelector('[role="menuitemcheckbox"]')).toBeNull();
+
+    harness.rerender({ allowedMergeStrategies: ["squash"], mergeable: "mergeable" });
+    await flushReact(() => undefined);
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash" }]);
+  });
+
+  it("resets admin bypass after a failed merge before the next normal merge", async () => {
+    const fetchMock = installMergeFetchMock([
+      { status: 409, body: { ok: false, reason: "gh_error", detail: "merge rejected" } },
+      { status: 200, body: { ok: true } },
+    ]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"] });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+    await settle();
+    await flushReact(() => undefined);
+
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash", admin: true }, { strategy: "squash" }]);
+  });
 });
 
 function renderAction(prOverrides: Partial<PullRequestSummary>) {
+  return renderActionHarness(prOverrides).container;
+}
+
+function renderActionHarness(prOverrides: Partial<PullRequestSummary>, workspaceOverrides: Partial<Workspace> = {}) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
@@ -107,21 +207,30 @@ function renderAction(prOverrides: Partial<PullRequestSummary>) {
   });
   client.setQueryData(["provider-health"], { providerHealth: [providerHealth({ status: "healthy" })] });
 
-  flushSync(() => {
+  const render = (nextPr: Partial<PullRequestSummary>, nextWorkspace: Partial<Workspace>) => {
     root.render(
       createElement(
         QueryClientProvider,
         { client },
         createElement(PrCardActionSlot, {
-          workspace: workspace(),
-          pr: pullRequest(prOverrides),
+          workspace: workspace(nextWorkspace),
+          pr: pullRequest(nextPr),
           prTone: "pending",
         }),
       ),
     );
+  };
+
+  flushSync(() => {
+    render(prOverrides, workspaceOverrides);
   });
 
-  return rootElement;
+  return {
+    container: rootElement,
+    rerender(nextPr: Partial<PullRequestSummary>, nextWorkspace: Partial<Workspace> = workspaceOverrides) {
+      flushSync(() => render(nextPr, nextWorkspace));
+    },
+  };
 }
 
 function providerHealth(overrides: Partial<ProviderHealth>): ProviderHealth {
@@ -159,7 +268,7 @@ function pullRequest(overrides: Partial<PullRequestSummary>): PullRequestSummary
   };
 }
 
-function workspace(): Workspace {
+function workspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: "ws_test",
     repoId: "repo_test",
@@ -182,5 +291,66 @@ function workspace(): Workspace {
     createdAt: "2026-05-31T00:00:00.000Z",
     updatedAt: "2026-05-31T00:00:00.000Z",
     archivedAt: null,
+    ...overrides,
   };
+}
+
+async function openMergeMenu(container: HTMLElement) {
+  const mergeButton = container.querySelector<HTMLButtonElement>("button.pr-card-btn-merge");
+  if (!mergeButton) throw new Error("merge button missing");
+  await flushReact(() => mergeButton.click());
+}
+
+async function clickStrategy(container: HTMLElement, label: string) {
+  const strategy = Array.from(container.querySelectorAll<HTMLButtonElement>(".pr-card-merge-strategy")).find((button) =>
+    button.textContent?.includes(label),
+  );
+  if (!strategy) throw new Error(`strategy button missing: ${label}`);
+  await flushReact(() => strategy.click());
+}
+
+function adminBypassItem(container: HTMLElement): HTMLButtonElement {
+  const item = container.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]');
+  if (!item) throw new Error("admin bypass item missing");
+  return item;
+}
+
+type FetchMock = ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>>;
+
+function installMergeFetchMock(responses: Array<{ status: number; body: unknown }>): FetchMock {
+  let index = 0;
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => {
+    const response = responses[Math.min(index, responses.length - 1)] ?? { status: 200, body: { ok: true } };
+    index += 1;
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+function mergeBodies(fetchMock: FetchMock): unknown[] {
+  return fetchMock.mock.calls
+    .filter(([path]) => String(path).includes("/pr-merge"))
+    .map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as unknown);
+}
+
+function mergePaths(fetchMock: FetchMock): string[] {
+  return fetchMock.mock.calls.map(([path]) => String(path)).filter((path) => path.includes("/pr-merge"));
+}
+
+async function settle() {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function flushReact(callback: () => void | Promise<void>) {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
 }

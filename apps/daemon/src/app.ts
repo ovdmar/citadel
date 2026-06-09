@@ -71,6 +71,7 @@ import { registerPrRoutes } from "./pr-routes.js";
 import { createProviderCache } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { ensurePtyDaemon } from "./pty-daemon-supervisor.js";
+import { closePtyDaemonSession } from "./pty-session-cleanup.js";
 import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
@@ -198,7 +199,13 @@ export async function createDaemonApp(input: {
     emit: (type, payload) => emit(type, payload),
     providerCache,
   });
-  const operations = input.operations ?? new OperationService(store, config, runAutoTransitions);
+  const operations =
+    input.operations ??
+    new OperationService(
+      store,
+      { ...config, closePtySession: (session) => closePtyDaemonSession(session) },
+      runAutoTransitions,
+    );
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
   // (rotated at 50 MB) and keeps the last 1000 events in memory for the
   // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
@@ -379,7 +386,7 @@ export async function createDaemonApp(input: {
   });
   registerReviewRoutes({ app, store, config, asyncRoute, emit });
 
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
+  registerAgentSessionRoutes(app, { operations, store, emit, asyncRoute, config });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(

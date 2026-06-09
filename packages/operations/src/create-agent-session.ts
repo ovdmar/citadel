@@ -443,7 +443,7 @@ export async function createTerminalSession(
 }
 
 function configuredTerminalBackend(): WorkspaceSession["terminalBackend"] {
-  return process.env.CITADEL_TERMINAL_BACKEND === "pty-daemon" ? "pty-daemon" : "tmux";
+  return process.env.CITADEL_TERMINAL_BACKEND === "tmux" ? "tmux" : "pty-daemon";
 }
 
 async function launchRuntimeOnce(

@@ -42,6 +42,12 @@ test("inspector PR section renders even when the workspace has no PR", async ({ 
     const checksSection = page.locator(".ins-section").filter({ has: page.getByText("Checks") });
     await expect(checksSection.locator(".ins-pr-refresh")).toBeVisible();
 
+    const invalidMerge = await apiPost(request, `${API_BASE}/api/workspaces/${workspace.workspaceId}/pr-merge`, {
+      data: { strategy: "squash", admin: "true" },
+    });
+    expect(invalidMerge.status()).toBe(400);
+    expect((await invalidMerge.json()) as { error: string }).toEqual({ error: "invalid_merge_request" });
+
     void workspace;
   } finally {
     fs.rmSync(fixture.dir, { recursive: true, force: true });

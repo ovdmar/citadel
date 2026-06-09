@@ -21,12 +21,18 @@ const xtermMocks = vi.hoisted(() => {
   class FakeTerminal {
     static instances: FakeTerminal[] = [];
     options: Record<string, unknown>;
+    cols = 80;
+    rows = 24;
     focus = vi.fn();
     dispose = vi.fn();
     refresh = vi.fn();
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+    });
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -49,7 +55,7 @@ const xtermMocks = vi.hoisted(() => {
 
   class FakeFitAddon {
     static instances: FakeFitAddon[] = [];
-    fit = vi.fn();
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
 
     constructor() {
       FakeFitAddon.instances.push(this);

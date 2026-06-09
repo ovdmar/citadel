@@ -7,6 +7,7 @@ import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { shouldReapTmuxOrphans } from "./orphan-reaper-safety.js";
 import { reapOrphans } from "./orphan-reaper.js";
+import { closePtyDaemonSession } from "./pty-session-cleanup.js";
 
 // Resolve the worktree root before loading config. When running inside a
 // Citadel checkout, env always wins over dev.json; dev.json wins over an
@@ -79,7 +80,10 @@ if (
 }
 const store = new SqliteStore(config.databasePath);
 store.migrate();
-const operations = new OperationService(store, config);
+const operations = new OperationService(store, {
+  ...config,
+  closePtySession: (session) => closePtyDaemonSession(session),
+});
 const layoutMigration = operations.runWorkspaceLayoutMigrations();
 if (layoutMigration.operationId && (layoutMigration.migrated > 0 || layoutMigration.skipped.length > 0)) {
   console.log(

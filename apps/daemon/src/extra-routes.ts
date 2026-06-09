@@ -21,6 +21,7 @@ type AsyncRoute = (
 
 const execFileAsync = promisify(execFile);
 const GITHUB_QUOTA_CACHE_TTL_MS = 60_000;
+const GITHUB_QUOTA_COOLDOWN_PERCENT_USED = 99;
 
 export function registerWorkspaceExtraRoutes(input: {
   app: express.Express;
@@ -497,12 +498,15 @@ async function readGitHubQuota(
 
 function quotaCooldownFromResources(quota: GitHubQuotaSummary): { until: number; reason: string } | null {
   const exhausted = quota.resources.find(
-    (resource) => (resource.name === "graphql" || resource.name === "core") && resource.remaining === 0,
+    (resource) =>
+      (resource.name === "graphql" || resource.name === "core") &&
+      (resource.remaining === 0 || resource.percentUsed >= GITHUB_QUOTA_COOLDOWN_PERCENT_USED),
   );
   if (!exhausted?.resetAt) return null;
   const resetMs = Date.parse(exhausted.resetAt);
   if (!Number.isFinite(resetMs) || resetMs <= Date.now()) return null;
-  const reason = `GitHub ${exhausted.name} quota exhausted until ${exhausted.resetAt}`;
+  const state = exhausted.remaining === 0 ? "exhausted" : "nearly exhausted";
+  const reason = `GitHub ${exhausted.name} quota ${state} until ${exhausted.resetAt}`;
   const until = setGhCooldown(reason, Math.max(1, resetMs - Date.now()));
   return { until, reason };
 }

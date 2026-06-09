@@ -15,18 +15,14 @@ import type {
   VersionControlSummary,
 } from "@citadel/contracts";
 import { PrMergeStateStatusSchema } from "@citadel/contracts";
-import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
+import type { ParentPr, PrCommit } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
-import {
-  GhRateLimitedError,
-  getGhCooldown,
-  getGhCooldownReason,
-  getGhCooldownUntil,
-  isRateLimitError,
-  setGhCooldown,
-} from "./gh-cooldown.js";
+import { GhRateLimitedError, getGhCooldown, isRateLimitError } from "./gh-cooldown.js";
+import { gh } from "./gh-runner.js";
 export { pLimit } from "./p-limit.js";
 export * from "./pr-actions.js";
+export { setGithubCommand } from "./gh-runner.js";
+export { mergePr } from "./pr-merge.js";
 
 // Re-export the cooldown surface so existing consumers (apps/daemon,
 // gh-quota-wiring, tests) keep their import paths. setGhCooldown is
@@ -660,38 +656,6 @@ async function gitOptional(rootPath: string, args: string[]) {
   }
 }
 
-let githubCommandOverride = "gh";
-
-export function setGithubCommand(command: string | undefined) {
-  githubCommandOverride = command?.length ? command : "gh";
-}
-
-// Global gh rate-limit circuit breaker. The cooldown state lives in
-// ./gh-cooldown.ts (extracted to keep this file under the 800-line gate);
-// every gh-touching code path in this module funnels through gh() below, so
-// the gate is uniform.
-async function gh(rootPath: string, args: string[]) {
-  const until = getGhCooldownUntil();
-  if (until > Date.now()) {
-    throw new GhRateLimitedError(until, getGhCooldownReason() ?? "rate limit");
-  }
-  try {
-    const result = await execFileAsync(githubCommandOverride, args, {
-      cwd: rootPath,
-      timeout: 12000,
-      maxBuffer: 1024 * 1024,
-    });
-    return result.stdout.trim();
-  } catch (error) {
-    const reason = isRateLimitError(error);
-    if (reason) {
-      const newUntil = setGhCooldown(reason);
-      throw new GhRateLimitedError(newUntil, reason);
-    }
-    throw error;
-  }
-}
-
 // PR display helpers — used by the daemon's PR routes for the always-on
 // cross-workspace poll, force-refresh, merge button, and stacked-PR detection.
 
@@ -743,34 +707,6 @@ export function detectParentPr(
   const choice = open ?? matches[0];
   if (!choice) return null;
   return { number: choice.number, url: choice.url, headRefName: choice.headRefName, state: choice.state };
-}
-
-type GhRunner = (args: string[]) => Promise<string>;
-
-// Internal seam: tests inject a fake runner; production calls gh() in this
-// module. NO --delete-branch is ever passed — branch deletion is a separate
-// opt-in flow that's intentionally not part of the night's scope.
-export async function mergePr(
-  input: { rootPath: string; number: number; strategy: PrMergeStrategy },
-  runner?: GhRunner,
-): Promise<PrMergeResponse> {
-  const run: GhRunner = runner ?? ((args) => gh(input.rootPath, args));
-  const args = ["pr", "merge", String(input.number), `--${input.strategy}`];
-  try {
-    await run(args);
-    return { ok: true };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, reason: classifyMergeFailure(detail), detail };
-  }
-}
-
-function classifyMergeFailure(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("not mergeable") || lower.includes("merge conflict")) return "not_mergeable";
-  if (lower.includes("not authorized") || lower.includes("authentication")) return "gh_auth";
-  if (lower.includes("not allowed") || lower.includes("disabled")) return "strategy_disallowed";
-  return "gh_error";
 }
 
 // isGhAvailable returns whether `gh auth status` succeeded recently for the

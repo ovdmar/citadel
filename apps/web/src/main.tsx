@@ -40,6 +40,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./voice-mode.css";
 import "./chrome.css";
+import "./resource-breakdown.css";
 import "./stage-terminal.css";
 import "./stage-empty-launcher.css";
 import "./structured-home-summary.css";

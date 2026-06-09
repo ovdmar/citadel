@@ -20,6 +20,10 @@ const xtermMocks = vi.hoisted(() => {
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+    });
     private dataHandler: ((data: string) => void) | null = null;
     private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     private selectionHandler: (() => void) | null = null;
@@ -60,7 +64,8 @@ const xtermMocks = vi.hoisted(() => {
 
   class FakeFitAddon {
     static instances: FakeFitAddon[] = [];
-    fit = vi.fn();
+    proposedDimensions: { cols: number; rows: number } | undefined = { cols: 80, rows: 24 };
+    proposeDimensions = vi.fn(() => this.proposedDimensions);
 
     constructor() {
       FakeFitAddon.instances.push(this);
@@ -203,39 +208,42 @@ describe("TerminalPane resize handling", () => {
     observer.trigger();
     window.dispatchEvent(new Event("resize"));
     observer.trigger();
-    expect(fit.fit).not.toHaveBeenCalled();
+    expect(fit.proposeDimensions).not.toHaveBeenCalled();
 
     flushAnimationFrames();
 
-    expect(fit.fit).toHaveBeenCalledTimes(1);
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(fit.proposeDimensions).toHaveBeenCalledTimes(1);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
+    expect(term.resize).toHaveBeenCalledWith(78, 24);
 
     observer.trigger();
     window.dispatchEvent(new Event("resize"));
     flushAnimationFrames();
 
-    expect(fit.fit).toHaveBeenCalledTimes(2);
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(fit.proposeDimensions).toHaveBeenCalledTimes(2);
+    expect(term.resize).toHaveBeenCalledTimes(1);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
 
-    term.cols = 100;
-    term.rows = 32;
+    fit.proposedDimensions = { cols: 100, rows: 32 };
     observer.trigger();
     window.dispatchEvent(new Event("resize"));
     flushAnimationFrames();
 
-    expect(fit.fit).toHaveBeenCalledTimes(3);
+    expect(fit.proposeDimensions).toHaveBeenCalledTimes(3);
+    expect(term.resize).toHaveBeenCalledWith(98, 32);
+    expect(term.resize).toHaveBeenCalledTimes(2);
     expect(resizeMessages(ws)).toEqual([
-      { type: "resize", cols: 80, rows: 24 },
-      { type: "resize", cols: 100, rows: 32 },
+      { type: "resize", cols: 78, rows: 24 },
+      { type: "resize", cols: 98, rows: 32 },
     ]);
   });
 
   it("does not send invalid terminal dimensions", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
-    const term = xtermMocks.FakeTerminal.instances[0];
+    const fit = xtermMocks.FakeFitAddon.instances[0];
     const observer = FakeResizeObserver.instances[0];
-    if (!ws || !term || !observer) throw new Error("terminal rig missing");
+    if (!ws || !fit || !observer) throw new Error("terminal rig missing");
 
     await flushReactUpdate(() => ws.open());
 
@@ -249,20 +257,72 @@ describe("TerminalPane resize handling", () => {
     ];
 
     for (const [cols, rows] of invalidDimensions) {
-      term.cols = cols;
-      term.rows = rows;
+      fit.proposedDimensions = { cols, rows };
       observer.trigger();
       flushAnimationFrames();
     }
 
     expect(resizeMessages(ws)).toEqual([]);
 
-    term.cols = 90;
-    term.rows = 30;
+    fit.proposedDimensions = { cols: 90, rows: 30 };
     observer.trigger();
     flushAnimationFrames();
 
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 90, rows: 30 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 88, rows: 30 }]);
+  });
+
+  it("does not repeatedly shrink when fit cannot propose dimensions", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const fit = xtermMocks.FakeFitAddon.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !term || !fit || !observer) throw new Error("terminal rig missing");
+
+    await flushReactUpdate(() => ws.open());
+    flushAnimationFrames();
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
+    expect(term.cols).toBe(78);
+
+    fit.proposedDimensions = undefined;
+    observer.trigger();
+    flushAnimationFrames();
+    observer.trigger();
+    flushAnimationFrames();
+
+    expect(term.cols).toBe(78);
+    expect(term.resize).toHaveBeenCalledTimes(1);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
+  });
+
+  it("clamps readable terminal columns at the backend minimum", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const fit = xtermMocks.FakeFitAddon.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !fit || !observer) throw new Error("terminal rig missing");
+
+    await flushReactUpdate(() => ws.open());
+    ws.sent = [];
+
+    const narrowSizes: Array<[number, number]> = [
+      [19, 12],
+      [20, 13],
+      [21, 14],
+    ];
+    for (const [cols, rows] of narrowSizes) {
+      fit.proposedDimensions = { cols, rows };
+      observer.trigger();
+      flushAnimationFrames();
+      expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 20, rows }]);
+      ws.sent = [];
+    }
+
+    fit.proposedDimensions = { cols: 23.9, rows: 15 };
+    observer.trigger();
+    flushAnimationFrames();
+
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 21, rows: 15 }]);
   });
 
   it("sends the first valid resize when the WebSocket opens after an earlier fit", async () => {
@@ -278,7 +338,7 @@ describe("TerminalPane resize handling", () => {
     await flushReactUpdate(() => ws.open());
     flushAnimationFrames();
 
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
   });
 
   it("sends the first valid resize again after reconnect", async () => {
@@ -287,7 +347,7 @@ describe("TerminalPane resize handling", () => {
     if (!first) throw new Error("missing first ws");
     await flushReactUpdate(() => first.open());
     flushAnimationFrames();
-    expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
 
     await flushReactUpdate(() => {
       getTerminalHandle("sess_1")?.reload();
@@ -298,7 +358,7 @@ describe("TerminalPane resize handling", () => {
     await flushReactUpdate(() => second.open());
     flushAnimationFrames();
 
-    expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
   });
 
   it("cancels pending resize work on unmount", async () => {
@@ -314,7 +374,7 @@ describe("TerminalPane resize handling", () => {
     untrackRoot(root);
     flushAnimationFrames();
 
-    expect(fit.fit).not.toHaveBeenCalled();
+    expect(fit.proposeDimensions).not.toHaveBeenCalled();
     expect(resizeMessages(ws)).toEqual([]);
   });
 
