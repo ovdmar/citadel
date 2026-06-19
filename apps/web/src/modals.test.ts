@@ -306,7 +306,7 @@ function renderCreateWorkspaceModal(overrides: {
       ),
     );
   });
-  return rootElement;
+  return document.body;
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {

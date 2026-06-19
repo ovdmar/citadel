@@ -49,10 +49,10 @@ const violations: string[] = [];
 for (const rule of rules) {
   for (const file of walk(path.join(root, rule.scope))) {
     // Architecture boundaries protect production code. Test files
-    // (*.test.ts, *.test.tsx) legitimately introspect source files — e.g.
+    // (*.test.ts, *.test.tsx, *.test.js, *.test.jsx) legitimately introspect source files — e.g.
     // reading CSS via node:fs to run regex audits, or shimming DOM APIs
     // — so exempt them from the import allowlist.
-    if (/\.test\.(ts|tsx)$/.test(file)) continue;
+    if (/\.test\.(ts|tsx|js|jsx)$/.test(file)) continue;
     const text = fs.readFileSync(file, "utf8");
     for (const forbidden of rule.forbidden) {
       if (text.includes(`from "${forbidden}`) || text.includes(`from '${forbidden}`)) {

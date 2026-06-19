@@ -106,7 +106,7 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      command: `CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} CITADEL_E2E_RUN_ID=${e2eRunId} sh -c 'cd apps/web && exec node node_modules/vite/bin/vite.js --host 0.0.0.0'`,
+      command: `NODE_ENV=development CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} CITADEL_E2E_RUN_ID=${e2eRunId} sh -c 'cd apps/web && exec node node_modules/vite/bin/vite.js --host 0.0.0.0'`,
       url: webBase,
       reuseExistingServer: false,
       timeout: 30_000,

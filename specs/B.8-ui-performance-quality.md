@@ -9,7 +9,7 @@
 [~] 1. Citadel uses a workspace-first cockpit layout.
 [~] 2. Settings is secondary to the cockpit.
 [ ] 3. The UI is calm, dense, premium, and operational.
-[ ] 4. shadcn-style components are used where they improve consistency and speed.
+[~] 4. shadcn-style components are used where they improve consistency and speed. First wave of primitives shipped under `apps/web/src/components/ui/` (Button, Badge, Card, Panel, Input/Textarea/Select/Label/FormField/HelpText, Tabs, Dialog, Tooltip, Chip, IconButton, EmptyState, Skeleton, Toast); see `apps/web/src/design-system/README.md`. Remaining surface migrations deferred to follow-up PRs.
 [~] 5. The UI has theme support. The theme selector is a single cycling button with three states (Light / Dark / System); System resolves via `prefers-color-scheme`. Toggling the cockpit theme re-themes every open terminal in place through the xterm renderer — no full reload, no confirm prompt, and no terminal-session restart. Rapid toggles coalesce through React state, and OS-driven theme flips on the System setting follow the same code path.
 [ ] 6. Workspace rows are compact and scannable.
 [ ] 7. Status language is concrete and operator-facing.

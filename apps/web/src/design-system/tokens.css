@@ -1,0 +1,237 @@
+/*
+ * Citadel cockpit design tokens.
+ *
+ * Single canonical source for every CSS custom property the cockpit uses.
+ * `apps/web/src/styles.css` imports this file once; component CSS reads
+ * tokens via `var(...)`. The companion `tokens.inventory.txt` enumerates
+ * every token currently referenced — `tokens.test.ts` enforces that the
+ * inventory and these definitions stay in lockstep.
+ *
+ * Cascade:
+ *   :root                                      = light defaults (also the value used by tests).
+ *   :root[data-theme="dark"]                   = explicit dark theme.
+ *   :root[data-theme="light"]                  = explicit light (no extra overrides needed).
+ *   @media (prefers-color-scheme: dark)        = OS-driven dark when no theme picked.
+ *
+ * All tokens are reachable via explicit `data-theme` blocks so happy-dom
+ * tests (which do not simulate prefers-color-scheme) can exercise both
+ * themes.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Typography */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-serif: "Geist", ui-serif, Georgia, serif;
+
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11", "ss02";
+  letter-spacing: -0.005em;
+  background: #ece7da;
+  color: #1a1814;
+
+  /* Surfaces — warm cream palette */
+  --c-canvas: #ece7da;
+  --c-app: #efeae0;
+  --c-surface: #f0ebe2;
+  --c-elev: #f5f1e8;
+  --c-card: #faf6ee;
+
+  /* Borders */
+  --c-line-1: rgba(36, 28, 14, 0.06);
+  --c-line-2: rgba(36, 28, 14, 0.1);
+  --c-line-3: rgba(36, 28, 14, 0.16);
+
+  /* Foreground — neutral text scale, 1 = strongest */
+  --c-fg-1: #1a1814;
+  --c-fg-2: #4a463e;
+  --c-fg-3: #6f695d;
+  --c-fg-4: #9c9485;
+  --c-fg-5: #c0b8a8;
+
+  /* Inverted (dark-on-light) accent surfaces */
+  --c-dark: #14171f;
+  --c-dark-2: #1f232e;
+  --c-on-dark: #f2eee2;
+  --c-on-dark-d: #9da0a8;
+
+  /* Status — OKLCH so light/dark stay perceptually paired */
+  --c-ok: oklch(58% 0.14 145);
+  --c-ok-bg: oklch(63% 0.1 150 / 0.14);
+  --c-warn: oklch(68% 0.13 70);
+  --c-warn-bg: oklch(68% 0.13 70 / 0.14);
+  --c-bad: oklch(58% 0.16 25);
+  --c-bad-bg: oklch(58% 0.16 25 / 0.14);
+  --c-info: oklch(58% 0.1 240);
+  --c-info-bg: oklch(58% 0.1 240 / 0.14);
+
+  /* Elevation shadows */
+  --sh-1: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 1px 1px rgba(20, 12, 0, 0.03);
+  --sh-2: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 1px 2px rgba(20, 12, 0, 0.05), 0 6px 18px -8px rgba(20, 12, 0, 0.12);
+  --sh-card: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(20, 12, 0, 0.04), 0 1px 0 rgba(20, 12, 0, 0.04);
+
+  /* Legacy aliases — preserved so bespoke CSS keeps rendering unchanged */
+  --color-action: #14171f;
+  --color-action-hover: #1f232e;
+  --color-accent: #14171f;
+  --color-success: oklch(58% 0.14 145);
+  --color-warning: oklch(60% 0.13 70);
+  --color-danger: oklch(58% 0.16 25);
+  --color-purple: oklch(55% 0.18 295);
+  --color-merged: oklch(55% 0.18 295);
+  --surface: var(--c-canvas);
+  --surface-strong: #e3dccc;
+  --panel: var(--c-surface);
+  --panel-elevated: var(--c-elev);
+  --panel-strong: var(--c-elev);
+  --line: var(--c-line-2);
+  --line-strong: var(--c-line-3);
+  --muted: var(--c-fg-3);
+  --text-muted: var(--c-fg-3);
+  --topbar-bg: var(--c-app);
+  --topbar-fg: var(--c-fg-1);
+  --topbar-line: var(--c-line-2);
+  --shadow-color: 36 28 14;
+  --overlay-bg: rgba(36, 28, 14, 0.45);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  background: #15130f;
+  color: #f0ebdd;
+
+  --c-canvas: #15130f;
+  --c-app: #1a1814;
+  --c-surface: #201d17;
+  --c-elev: #26221b;
+  --c-card: #2b2620;
+
+  --c-line-1: rgba(255, 245, 220, 0.05);
+  --c-line-2: rgba(255, 245, 220, 0.08);
+  --c-line-3: rgba(255, 245, 220, 0.14);
+
+  --c-fg-1: #f0ebdd;
+  --c-fg-2: #c8c2b0;
+  --c-fg-3: #948d7b;
+  --c-fg-4: #6b6557;
+  --c-fg-5: #4a463c;
+
+  --c-dark: #f0ebdd;
+  --c-dark-2: #e1dbc8;
+  --c-on-dark: #15130f;
+  --c-on-dark-d: #6b6557;
+
+  --c-ok: oklch(72% 0.14 145);
+  --c-ok-bg: oklch(60% 0.1 145 / 0.18);
+  --c-warn: oklch(78% 0.14 70);
+  --c-warn-bg: oklch(60% 0.13 70 / 0.18);
+  --c-bad: oklch(72% 0.18 25);
+  --c-bad-bg: oklch(60% 0.16 25 / 0.18);
+  --c-info: oklch(72% 0.12 240);
+  --c-info-bg: oklch(60% 0.1 240 / 0.18);
+
+  --sh-1: 0 1px 0 rgba(255, 245, 220, 0.04) inset, 0 1px 1px rgba(0, 0, 0, 0.4);
+  --sh-2: 0 1px 0 rgba(255, 245, 220, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.45), 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+  --sh-card: 0 1px 0 rgba(255, 245, 220, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  --color-action: #f0ebdd;
+  --color-action-hover: #ffffff;
+  --color-accent: #f0ebdd;
+  --color-success: oklch(72% 0.14 145);
+  --color-warning: oklch(78% 0.14 70);
+  --color-danger: oklch(72% 0.18 25);
+  --color-purple: oklch(72% 0.18 295);
+  --color-merged: oklch(72% 0.18 295);
+  --surface: var(--c-canvas);
+  --surface-strong: var(--c-surface);
+  --panel: var(--c-surface);
+  --panel-elevated: var(--c-elev);
+  --panel-strong: var(--c-elev);
+  --line: var(--c-line-2);
+  --line-strong: var(--c-line-3);
+  --muted: var(--c-fg-3);
+  --text-muted: var(--c-fg-3);
+  --topbar-bg: var(--c-app);
+  --topbar-fg: var(--c-fg-1);
+  --topbar-line: var(--c-line-2);
+  --shadow-color: 0 0 0;
+  --overlay-bg: rgba(0, 0, 0, 0.55);
+}
+
+/* Explicit light theme — :root already supplies the values, this block
+ * exists so an explicit data-theme="light" wins over the OS-dark override
+ * below. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* OS-driven dark mode for users who have not picked a theme. The selector
+ * matches roots with NO data-theme attribute (or any value other than the
+ * two explicit ones); the dark token values mirror :root[data-theme="dark"]
+ * above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    color-scheme: dark;
+    background: #15130f;
+    color: #f0ebdd;
+
+    --c-canvas: #15130f;
+    --c-app: #1a1814;
+    --c-surface: #201d17;
+    --c-elev: #26221b;
+    --c-card: #2b2620;
+
+    --c-line-1: rgba(255, 245, 220, 0.05);
+    --c-line-2: rgba(255, 245, 220, 0.08);
+    --c-line-3: rgba(255, 245, 220, 0.14);
+
+    --c-fg-1: #f0ebdd;
+    --c-fg-2: #c8c2b0;
+    --c-fg-3: #948d7b;
+    --c-fg-4: #6b6557;
+    --c-fg-5: #4a463c;
+
+    --c-dark: #f0ebdd;
+    --c-dark-2: #e1dbc8;
+    --c-on-dark: #15130f;
+    --c-on-dark-d: #6b6557;
+
+    --c-ok: oklch(72% 0.14 145);
+    --c-ok-bg: oklch(60% 0.1 145 / 0.18);
+    --c-warn: oklch(78% 0.14 70);
+    --c-warn-bg: oklch(60% 0.13 70 / 0.18);
+    --c-bad: oklch(72% 0.18 25);
+    --c-bad-bg: oklch(60% 0.16 25 / 0.18);
+    --c-info: oklch(72% 0.12 240);
+    --c-info-bg: oklch(60% 0.1 240 / 0.18);
+
+    --sh-1: 0 1px 0 rgba(255, 245, 220, 0.04) inset, 0 1px 1px rgba(0, 0, 0, 0.4);
+    --sh-2: 0 1px 0 rgba(255, 245, 220, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.45), 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+    --sh-card: 0 1px 0 rgba(255, 245, 220, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+
+    --color-action: #f0ebdd;
+    --color-action-hover: #ffffff;
+    --color-accent: #f0ebdd;
+    --color-success: oklch(72% 0.14 145);
+    --color-warning: oklch(78% 0.14 70);
+    --color-danger: oklch(72% 0.18 25);
+    --color-purple: oklch(72% 0.18 295);
+    --color-merged: oklch(72% 0.18 295);
+    --surface: var(--c-canvas);
+    --surface-strong: var(--c-surface);
+    --panel: var(--c-surface);
+    --panel-elevated: var(--c-elev);
+    --panel-strong: var(--c-elev);
+    --line: var(--c-line-2);
+    --line-strong: var(--c-line-3);
+    --muted: var(--c-fg-3);
+    --text-muted: var(--c-fg-3);
+    --topbar-bg: var(--c-app);
+    --topbar-fg: var(--c-fg-1);
+    --topbar-line: var(--c-line-2);
+    --shadow-color: 0 0 0;
+    --overlay-bg: rgba(0, 0, 0, 0.55);
+  }
+}
