@@ -7,7 +7,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type { CreateWorkspaceInput, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
+import type {
+  CreateWorkspaceInput,
+  HookOutput,
+  JiraAutoTransitionEvent,
+  Operation,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
 import { createId, generateFunnyName, nowIso, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import {
@@ -15,10 +22,13 @@ import {
   RemoteRefMissingError,
   WorkspaceNameTakenError,
   addWorktree,
+  branchRefExists,
   classifyWorktreeError,
   isUniqueWorkspaceNameViolation,
+  isUniqueWorkspacePathViolation,
   tryRunGit,
 } from "./helpers.js";
+import { createStructuredWorkspaceShell } from "./structured-workspace.js";
 
 // Shared dep surface for the extracted workspace lifecycle modules. The
 // service class in `index.ts` binds these to its private methods.
@@ -60,15 +70,22 @@ export type WorkspaceOpsDeps = {
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   runNotificationHooks: (
     event: HookConfig["event"],
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) => Promise<void>;
-  onSessionStopped?: (sessionId: string) => void;
+  ) => Promise<unknown>;
+  runAutoTransitions?:
+    | ((
+        event: JiraAutoTransitionEvent,
+        repo: Repo,
+        workspace: Workspace,
+        payload: { repo: Repo; workspace: Workspace },
+      ) => Promise<void>)
+    | null;
 };
 
 export type CreateWorkspaceOptions = {
@@ -81,6 +98,7 @@ export async function createWorkspaceImpl(
   input: CreateWorkspaceInput,
   options: CreateWorkspaceOptions = {},
 ): Promise<{ operationId: string; workspaceId: string }> {
+  if (input.mode === "structured" && !input.repoId) return createStructuredWorkspaceShell(deps, input);
   const repo = deps.store.listRepos().find((candidate) => candidate.id === input.repoId);
   if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
   const namespaceId = input.namespaceId ?? null;
@@ -97,23 +115,25 @@ export async function createWorkspaceImpl(
 
   // Resolve the workspace name with daemon-side funny-name generation when
   // the caller leaves it blank. The insert is wrapped in a retry loop so
-  // unique-name collisions (rare with a 30×30 dictionary) don't surface as
-  // operator-facing errors. After 5 fresh draws we fall back to a 4-char
-  // random suffix to keep the create attempt from failing.
+  // unique-name collisions don't surface as operator-facing errors: generated
+  // names redraw, while caller-provided names get "-2", "-3", ... appended.
+  // After 5 generated draws we fall back to a 4-char random suffix to keep the
+  // create attempt from failing.
   const callerName = input.name.trim();
   const wantsGenerated = callerName.length === 0;
   let workspace: Workspace | null = null;
   let lastTriedName = callerName;
+  let lastTriedBranch = "";
   let branch = "";
   let workspacePath = "";
-  const maxAttempts = wantsGenerated ? 6 : 1;
+  const maxAttempts = wantsGenerated ? 6 : 25;
+  const initialBranch = resolveWorkspaceBranch(input, newBranch, callerName, 0, "");
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    let candidate = callerName;
-    if (wantsGenerated) {
-      candidate = attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
-    }
+    const candidate = workspaceNameForAttempt(callerName, wantsGenerated, attempt);
     lastTriedName = candidate;
-    branch = newBranch ?? workspaceBranchName({ ...input, name: candidate });
+    branch = resolveWorkspaceBranch(input, newBranch, candidate, attempt, initialBranch);
+    lastTriedBranch = branch;
+    if (!existingBranch && branchRefExists(repo.rootPath, repo.defaultRemote, branch)) continue;
     workspacePath = path.join(repo.worktreeParent, branch);
     const draft: Workspace = {
       id: createId("ws"),
@@ -143,8 +163,8 @@ export async function createWorkspaceImpl(
       workspace = draft;
       break;
     } catch (error) {
-      if (isUniqueWorkspaceNameViolation(error)) {
-        if (wantsGenerated && attempt < maxAttempts - 1) continue;
+      if (isUniqueWorkspaceNameViolation(error) || isUniqueWorkspacePathViolation(error)) {
+        if (attempt < maxAttempts - 1) continue;
         deps.store.upsertOperation({
           ...operation,
           status: "failed",
@@ -158,7 +178,13 @@ export async function createWorkspaceImpl(
     }
   }
   if (!workspace) {
-    // Defensive — the loop above either inserts or throws; this is unreachable.
+    deps.store.upsertOperation({
+      ...operation,
+      status: "failed",
+      progress: 100,
+      error: `workspace_branch_taken: ${lastTriedBranch}`,
+      updatedAt: nowIso(),
+    });
     throw new WorkspaceNameTakenError(repo.id, lastTriedName);
   }
   deps.logOp(
@@ -191,6 +217,29 @@ export async function createWorkspaceImpl(
 
   await provision();
   return { operationId: operation.id, workspaceId: workspace.id };
+}
+
+function workspaceNameForAttempt(callerName: string, wantsGenerated: boolean, attempt: number): string {
+  if (wantsGenerated) return attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
+  if (attempt === 0) return callerName;
+  return `${callerName}-${attempt + 1}`;
+}
+
+function resolveWorkspaceBranch(
+  input: CreateWorkspaceInput,
+  newBranch: string | null,
+  workspaceName: string,
+  attempt: number,
+  initialBranch: string,
+): string {
+  const candidate = newBranch ?? workspaceBranchName({ ...input, name: workspaceName });
+  if (attempt === 0 || candidate !== initialBranch) return candidate;
+  return appendNumericSuffix(candidate, attempt + 1, 96);
+}
+
+function appendNumericSuffix(value: string, suffix: number, maxLength: number): string {
+  const tail = `-${suffix}`;
+  return `${value.slice(0, Math.max(1, maxLength - tail.length))}${tail}`;
 }
 
 async function provisionWorkspace(
@@ -253,6 +302,13 @@ async function provisionWorkspace(
       operation.id,
     );
     await deps.runNotificationHooks("workspace.created", repo, workspace, operation.id, { repo, workspace });
+    if (workspace.issueKey && deps.runAutoTransitions) {
+      try {
+        await deps.runAutoTransitions("workspace.issue_attached", repo, workspace, { repo, workspace });
+      } catch {
+        // Logged inside the callback.
+      }
+    }
     deps.store.upsertOperation({
       ...operation,
       workspaceId: workspace.id,

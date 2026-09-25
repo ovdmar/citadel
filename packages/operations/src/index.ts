@@ -2,154 +2,256 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
-import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput, WorktreeCheckout } from "@citadel/contracts";
+import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
-import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
+import {
+  type RuntimeDescriptor,
+  createAgentSession as createAgentSessionImpl,
+  createTerminalSession as createTerminalSessionImpl,
+} from "./create-agent-session.js";
 import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
-import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
+import { registerRepo as registerRepoImpl } from "./register-repo.js";
+import { checkWorkspaceRemovalImpl, removeWorkspaceCheckoutImpl, removeWorkspaceImpl } from "./remove-workspace.js";
+import type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { RuntimeDescriptor } from "./create-agent-session.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
+export type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
+export {
+  ScheduledAgentRunner,
+  parseCronExpression,
+  cronMatches,
+  nextCronRun,
+  describeCron,
+} from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
 export {
-  createDiagnosticsLogger,
-  noopDiagnosticsLogger,
-  type DiagnosticEvent,
-  type DiagnosticsLogger,
-  type DiagnosticsLoggerOptions,
-} from "./diagnostics.js";
-export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
-export type { AccountRateLimitInfo } from "./usage-limit.js";
-export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
-export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
+  executeWorkspaceLayoutMigration,
+  hasWorkspaceLayoutMigrationCandidates,
+  planWorkspaceLayoutMigration,
+  runWorkspaceLayoutMigrations,
+} from "./workspace-layout-migration.js";
+export type {
+  CheckoutGateSnapshot,
+  MarkCheckoutReadyForReviewResult,
+  RegisterCheckoutReviewArtifactResult,
+  WorkspaceManagerControlResult,
+  WorkspaceManagerTickResult,
+} from "./workspace-manager.js";
+export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
+export type {
+  WorkspaceGitSnapshot,
+  WorkspaceLayoutMigrationPlan,
+  WorkspaceLayoutMigrationSkipReason,
+} from "./workspace-layout-migration.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
-import {
-  cancelOperationInStore,
-  discoverDefaultBranch,
-  listHookDiagnostics,
-  reconcileStore,
-  tryRunGit,
-} from "./helpers.js";
+export { createDiagnosticsLogger, noopDiagnosticsLogger, type DiagnosticEvent, type DiagnosticsLogger, type DiagnosticsLoggerOptions } from "./diagnostics.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRateLimitInfo } from "./usage-limit.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop, type AutoResumeDeps, type AutoResumeLoopHandle } from "./auto-resume.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl, undeployApp as undeployAppImpl } from "./deploy.js";
+import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit } from "./helpers.js";
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
-import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 export * from "./review-system.js";
+import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
+import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
 import {
-  type WorkspaceAppsDeps,
-  discoverWorkspaceApps as discoverWorkspaceAppsImpl,
-  runWorkspaceAction as runWorkspaceActionImpl,
-} from "./workspace-apps.js";
+  hasWorkspaceLayoutMigrationCandidates,
+  runWorkspaceLayoutMigrations as runWorkspaceLayoutMigrationsImpl,
+} from "./workspace-layout-migration.js";
+import * as workspaceManager from "./workspace-manager.js";
+import * as workspacePlans from "./workspace-plans.js";
 
-type RuntimeSpawnArgs = {
-  command: string;
-  args: string[];
-  displayName: string;
-  promptArg?: string | null;
-  sessionIdArg?: string | null;
-  resumeArg?: string | null;
-};
+// Daemon-constructed callback that fires lifecycle-event-driven Jira
+// transitions. Optional — when not wired (e.g., unit tests that don't
+// involve Jira), all auto-transition paths short-circuit.
+export type RunAutoTransitionsDep = (
+  event: JiraAutoTransitionEvent,
+  repo: Repo,
+  workspace: Workspace,
+  payload: { repo: Repo; workspace: Workspace; session?: AgentSession },
+) => Promise<void>;
+
+export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
+  const rootPath = path.resolve(rootPathInput);
+  const repoDir = path.basename(rootPath);
+  if (dataDir) return path.join(dataDir, "worktrees", repoDir);
+  return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
+}
+
+function deployActionInflightKey(workspaceId: string, checkoutId: string | null | undefined): string {
+  return checkoutId ? `${workspaceId}:checkout:${checkoutId}` : `${workspaceId}:home`;
+}
+
+function workspaceForCheckout(workspace: Workspace, checkout: WorktreeCheckout): Workspace {
+  return {
+    ...workspace,
+    repoId: checkout.repoId,
+    name: checkout.displayName ?? checkout.name,
+    path: checkout.path,
+    branch: checkout.branch,
+    baseBranch: checkout.baseBranch,
+    kind: "worktree",
+    issueKey: checkout.issue?.key ?? workspace.issueKey,
+    issueTitle: checkout.issue?.title ?? workspace.issueTitle,
+    issueUrl: checkout.issue?.url ?? workspace.issueUrl,
+    updatedAt: checkout.updatedAt,
+  };
+}
 
 export class OperationService {
-  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
-  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
-
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
+      dataDir?: string;
       hooks: HookConfig[];
       repoDefaults: {
         setupHookIds: string[];
         teardownHookIds: string[];
+        requestReviewHookIds?: string[];
         appHookIds?: string[];
         actionHookIds?: string[];
-        requestReviewHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
+      terminal?: CitadelConfig["terminal"];
+      agentRuntimes?: CitadelConfig["agentRuntimes"];
+      agentSessions?: CitadelConfig["agentSessions"];
     },
+    private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
 
-  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
-
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
-    const now = nowIso();
-    const rootPath = path.resolve(input.rootPath);
-    if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
-    const repo: Repo = {
-      id: createId("repo"),
-      name: input.name || repoDisplayName(rootPath),
-      rootPath,
-      defaultBranch: discoverDefaultBranch(rootPath),
-      defaultRemote: "origin",
-      worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
-      setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
-      teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
-      requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
-      providerIds: ["github-gh", "jira-jtk"],
-      deployHookCommand: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    };
-    this.store.insertRepo(repo);
-    this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    const rootWorkspace: Workspace = {
-      id: createId("ws"),
-      repoId: repo.id,
-      name: "main",
-      path: repo.rootPath,
-      branch: repo.defaultBranch,
-      baseBranch: repo.defaultBranch,
-      source: "imported",
-      kind: "root",
-      prUrl: null,
-      issueKey: null,
-      issueTitle: null,
-      issueUrl: null,
-      slackThreadUrl: null,
-      section: "backlog",
-      pinned: true,
-      lifecycle: "ready",
-      dirty: false,
-      namespaceId: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    };
-    try {
-      this.store.insertWorkspace(rootWorkspace);
-      this.activity(
-        "workspace.root.created",
-        "system",
-        `Linked root workspace for ${repo.name}`,
-        repo.id,
-        rootWorkspace.id,
-        null,
-      );
-    } catch {} // root already present (re-register or migration backfill)
-    return repo;
+    const repoDefaults = this.config?.repoDefaults;
+    return registerRepoImpl(
+      {
+        store: this.store,
+        ...(repoDefaults ? { repoDefaults } : {}),
+        activity: (...args) => this.activity(...args),
+      },
+      {
+        ...input,
+        worktreeParent: input.worktreeParent || defaultWorktreeParent(input.rootPath, this.config?.dataDir),
+      },
+    );
   }
 
   createWorkspace = (input: CreateWorkspaceInput, options?: CreateWorkspaceOptions) =>
     createWorkspaceImpl(this.workspaceOpsDeps(), input, options);
 
+  createWorkspaceCheckout = (input: CreateWorkspaceCheckoutInput) =>
+    createWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
+
+  registerWorkspacePlan = (input: RegisterWorkspacePlanInput, options?: { actor?: workspacePlans.TrustedToolActor }) =>
+    workspacePlans.registerWorkspacePlan(this.planDeps(), input, options);
+
+  getWorkspacePlan = (input: { workspaceId?: string | undefined; cwd?: string | undefined }) =>
+    workspacePlans.getWorkspacePlan(this.planDeps(), input);
+
+  getCitadelContext = (input: { cwd: string }) => workspacePlans.getCitadelContext(this.planDeps(), input);
+
+  reportPlanDeviation = (input: {
+    workspaceId?: string | undefined;
+    checkoutId?: string | undefined;
+    cwd?: string | undefined;
+    planVersionId?: string | undefined;
+    severity?: PlanDeviationReport["severity"] | undefined;
+    description: string;
+    reportedBySessionId?: string | undefined;
+  }) => workspacePlans.reportPlanDeviation(this.planDeps(), input);
+
+  startWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.startWorkspaceManager(this.managerDeps(), input);
+
+  pauseWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.pauseWorkspaceManager(this.managerDeps(), input);
+
+  resumeWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.resumeWorkspaceManager(this.managerDeps(), input);
+
+  runWorkspaceManagerTick = (input: { workspaceId: string; leaseOwnerId?: string; leaseSeconds?: number }) =>
+    workspaceManager.runWorkspaceManagerTick(this.managerDeps(), input);
+
+  getCheckoutGateStatus = (input: CheckoutContextInput) =>
+    workspaceManager.getCheckoutGateStatus(this.managerDeps(), input);
+
+  markCheckoutReadyForReview = (input: MarkCheckoutReadyForReviewInput) =>
+    workspaceManager.markCheckoutReadyForReview(this.managerDeps(), input);
+
+  registerCheckoutReviewArtifact = (
+    input: RegisterCheckoutReviewArtifactInput,
+    options?: { actor?: workspaceManager.TrustedToolActor },
+  ) => workspaceManager.registerCheckoutReviewArtifact(this.managerDeps(), input, options);
+
+  updateTicketStatus = (input: UpdateTicketStatusInput) =>
+    workspaceManager.updateTicketStatus(this.managerDeps(), input);
+
+  runWorkspaceLayoutMigrations = () => {
+    if (!hasWorkspaceLayoutMigrationCandidates(this.store)) {
+      return { operationId: null, considered: 0, migrated: 0, skipped: [] };
+    }
+    const operation = this.operation(
+      "workspace.layout_migration",
+      "running",
+      null,
+      null,
+      5,
+      "Migrating legacy workspace layouts",
+    );
+    const summary = runWorkspaceLayoutMigrationsImpl({
+      store: this.store,
+      log: (level, message) => this.logOp(operation.id, level, message),
+    });
+    const failed = summary.skipped.filter((entry) => entry.reason === "migration_failed");
+    this.finalizeOperation(operation.id, {
+      status: failed.length ? "failed" : "succeeded",
+      progress: 100,
+      message: `Workspace layout migration: ${summary.migrated} migrated, ${summary.skipped.length} skipped`,
+      error: failed.length ? `${failed.length} workspace layout migration(s) failed` : null,
+    });
+    if (summary.migrated > 0) {
+      this.activity(
+        "workspace.layout_migration.migrated",
+        "system",
+        `Migrated ${summary.migrated} workspace layout(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    if (summary.skipped.length > 0) {
+      this.activity(
+        "workspace.layout_migration.skipped",
+        "system",
+        `Skipped ${summary.skipped.length} workspace layout migration(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    return { operationId: operation.id, ...summary };
+  };
+
   createAgentSession = (
-    input: CreateAgentSessionInput,
-    runtime: RuntimeSpawnArgs,
+    input: CreateAgentSessionOperationInput,
+    runtime: RuntimeDescriptor,
     options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
@@ -160,9 +262,13 @@ export class OperationService {
     return createAgentSessionImpl(
       {
         store: this.store,
+        terminal: this.config?.terminal,
+        ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
+        baseSystemPrompt: this.config?.agentSessions?.baseSystemPrompt ?? "",
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
+        runAutoTransitions: this.runAutoTransitionsDep,
       },
       input,
       runtime,
@@ -170,12 +276,34 @@ export class OperationService {
     );
   };
 
-  launchAgent = (input: LaunchAgentInput, runtime: RuntimeSpawnArgs) =>
+  createTerminalSession = (
+    input: CreateTerminalSessionInput,
+    options: { activitySource?: ActivityEvent["source"] } = {},
+  ) => {
+    if (input.namespaceId) {
+      const ws = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (ws && input.namespaceId !== ws.namespaceId)
+        this.assignWorkspaceToNamespace({ workspaceId: ws.id, namespaceId: input.namespaceId });
+    }
+    return createTerminalSessionImpl(
+      {
+        store: this.store,
+        terminal: this.config?.terminal,
+        activity: (...args) => this.activity(...args),
+      },
+      input,
+      options,
+    );
+  };
+
+  launchAgent = (input: LaunchAgentInput, runtime: RuntimeDescriptor) =>
     launchAgentImpl(
       {
         store: this.store,
         createWorkspace: (workspaceInput) => this.createWorkspace(workspaceInput),
         createAgentSession: (sessionInput, sessionRuntime) => this.createAgentSession(sessionInput, sessionRuntime),
+        createWorkspaceCheckout: (checkoutInput) => this.createWorkspaceCheckout(checkoutInput),
+        ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
         activity: ({ type, source, message, repoId, workspaceId, operationId }) =>
           this.activity(type, source, message, repoId, workspaceId, operationId),
       },
@@ -192,21 +320,28 @@ export class OperationService {
   getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
 
   stopAgentSession(input: { sessionId: string }) {
-    const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
+    const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
-    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    this.terminalHooks.onSessionStopped?.(session.id);
-    this.store.deleteSession(session.id);
+    if (session.kind !== "agent") return { stopped: false, reason: "session_not_agent" as const };
+    return this.stopWorkspaceSession(input);
+  }
+
+  stopWorkspaceSession(input: { sessionId: string }) {
+    const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
+    if (!session) return { stopped: false, reason: "session_not_found" as const };
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
+    this.store.closeWorkspaceSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+    const activityType = session.kind === "agent" ? "agent.stopped" : "terminal.stopped";
     this.activity(
-      "agent.stopped",
+      activityType,
       "user",
       `Stopped ${session.displayName}`,
       workspace?.repoId ?? null,
       session.workspaceId,
       null,
     );
-    return { stopped: true, removed: true, reason: "ok" as const };
+    return { stopped: true, removed: false, closed: true, reason: "ok" as const };
   }
 
   cancelOperation(operationId: string) {
@@ -238,23 +373,19 @@ export class OperationService {
       const result = await this.runWorkspaceAction({ repo, workspace, action });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
-    if (kind === "deploy.redeploy") {
+    if (kind === "deploy.redeploy" || kind === "deploy.undeploy") {
       const workspaceId = operation.retryInput.workspaceId as string;
       const appName = (operation.retryInput.appName as string | null) ?? undefined;
-      const result = await this.redeployApp({ workspaceId, appName });
+      const checkoutId = (operation.retryInput.checkoutId as string | null) ?? undefined;
+      const result =
+        kind === "deploy.redeploy"
+          ? await this.redeployApp({ workspaceId, checkoutId, appName })
+          : await this.undeployApp({ workspaceId, checkoutId, appName });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
     return { retried: false, reason: "unknown_kind" as const };
   }
 
-  /**
-   * Reconcile local state with reality:
-   *  - mark sessions as `orphaned` when their tmux session is gone
-   *  - mark workspaces whose worktree directory no longer exists as failed
-   *  - archive repos whose rootPath no longer exists.
-   *
-   * Returns counts of the cleanup performed.
-   */
   reconcile(): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
     return reconcileStore(this.store, (message, repoId) =>
       this.activity("repo.removed", "system", message, repoId, null, null),
@@ -264,6 +395,9 @@ export class OperationService {
   removeWorkspace = (input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) =>
     removeWorkspaceImpl(this.workspaceOpsDeps(), input);
 
+  removeWorkspaceCheckout = (input: { workspaceId: string; checkoutId: string; force?: boolean }) =>
+    removeWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
+
   checkWorkspaceRemoval = (input: { workspaceId: string; archiveOnly?: boolean }) =>
     checkWorkspaceRemovalImpl(this.workspaceOpsDeps(), input);
 
@@ -272,7 +406,7 @@ export class OperationService {
     if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
     const workspaces = this.store.listWorkspaces(repo.id);
     const sessions = this.store
-      .listSessions()
+      .listWorkspaceSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
       ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"].includes(session.status),
@@ -316,7 +450,8 @@ export class OperationService {
     }
 
     for (const session of sessions) {
-      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName && input.cleanupWorktrees)
+        killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
 
     let cleanedWorktrees = 0;
@@ -397,22 +532,54 @@ export class OperationService {
     return runWorkspaceActionImpl(this.workspaceAppsDeps(), input);
   }
 
-  listDeployedApps = (input: { workspaceId: string }) =>
-    listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
-  private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
-  redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
-    const existing = this.redeployInflight.get(input.workspaceId);
+  listDeployedApps = (input: { workspaceId: string; checkoutId?: string | null | undefined }) =>
+    listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspaceTarget(input));
+  private deployActionInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
+  redeployApp = (input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+    appName?: string | undefined;
+  }) => this.runDeployAction(input, redeployAppImpl);
+  undeployApp = (input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+    appName?: string | undefined;
+  }) => this.runDeployAction(input, undeployAppImpl);
+
+  private runDeployAction(
+    input: { workspaceId: string; checkoutId?: string | null | undefined; appName?: string | undefined },
+    action: typeof redeployAppImpl,
+  ) {
+    const key = deployActionInflightKey(input.workspaceId, input.checkoutId);
+    const existing = this.deployActionInflight.get(key);
     if (existing) return existing;
-    const promise = redeployAppImpl(this.deployOpsDeps(), {
-      ...this.resolveRepoWorkspace(input.workspaceId),
+    const target = this.resolveRepoWorkspaceTarget(input);
+    const promise = action(this.deployOpsDeps(), {
+      ...target,
+      checkoutId: input.checkoutId ?? undefined,
       appName: input.appName,
     }).finally(() => {
-      this.redeployInflight.delete(input.workspaceId);
+      this.deployActionInflight.delete(key);
     });
-    this.redeployInflight.set(input.workspaceId, promise);
+    this.deployActionInflight.set(key, promise);
     return promise;
-  };
+  }
+
+  private resolveRepoWorkspaceTarget(input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+  }): { repo: Repo; workspace: Workspace } {
+    if (!input.checkoutId) return this.resolveRepoWorkspace(input.workspaceId);
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    const checkout = this.store.findWorkspaceCheckout(input.checkoutId);
+    if (!checkout || checkout.workspaceId !== workspace.id || checkout.archivedAt) {
+      throw new Error(`Unknown checkout: ${input.checkoutId}`);
+    }
+    const repo = this.store.listRepos().find((candidate) => candidate.id === checkout.repoId);
+    if (!repo) throw new Error(`Checkout repo is missing: ${checkout.repoId}`);
+    return { repo, workspace: workspaceForCheckout(workspace, checkout) };
+  }
 
   private resolveRepoWorkspace(workspaceId: string): { repo: Repo; workspace: Workspace } {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
@@ -440,6 +607,7 @@ export class OperationService {
   renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
   archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
   restoreNamespace = (id: string) => namespaceOps.restoreNamespace(this.nsDeps(), id);
+  reorderNamespaces = (input: { namespaceIds: string[] }) => namespaceOps.reorderNamespaces(this.nsDeps(), input);
   assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
     namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
   private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({
@@ -454,9 +622,57 @@ export class OperationService {
       hooks: this.config?.hooks ?? [],
       appHookIds: this.config?.repoDefaults.appHookIds ?? [],
       actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
-      requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
+      requestReviewHookIds: repo.requestReviewHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
+
+  async runHookEvent(input: {
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    payload?: unknown;
+    hookIds?: string[] | null;
+    operationType?: string;
+    operationMessage?: string;
+  }): Promise<{ operationId: string; ran: number }> {
+    const operation = this.operation(
+      input.operationType ?? `hook.${input.event}`,
+      "running",
+      input.repo.id,
+      input.workspace.id,
+      10,
+      input.operationMessage ?? `Running ${input.event} hooks`,
+    );
+    try {
+      const result = await this.runWorkspaceHooks(
+        input.event,
+        input.hookIds ?? null,
+        input.repo,
+        input.workspace,
+        operation.id,
+        input.payload,
+      );
+      this.store.upsertOperation({
+        ...operation,
+        status: "succeeded",
+        progress: 100,
+        message: result.ran ? `Ran ${result.ran} ${input.event} hook(s)` : `No ${input.event} hooks found`,
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, ran: result.ran };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : `hook_${input.event}_failed`;
+      this.logOp(operation.id, "error", `${input.event} hook failed: ${errorMessage}`);
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: errorMessage,
+        updatedAt: nowIso(),
+      });
+      throw error;
+    }
+  }
 
   private operation(
     type: string,
@@ -490,6 +706,13 @@ export class OperationService {
     this.store.appendOperationLog(operationId, { level, message, at: nowIso() });
   }
 
+  // Reads the current row before upsert so streamed log lines (appended via
+  // appendOperationLog) aren't clobbered by the INSERT-OR-REPLACE pattern.
+  private finalizeOperation(operationId: string, patch: Partial<Operation>) {
+    const current = this.store.findOperation(operationId);
+    if (current) this.store.upsertOperation({ ...current, ...patch, updatedAt: nowIso() });
+  }
+
   private activity(
     type: string,
     source: ActivityEvent["source"],
@@ -512,39 +735,33 @@ export class OperationService {
     });
   }
 
+  private hooksDeps() {
+    return {
+      config: this.config,
+      activity: (...args: Parameters<typeof this.activity>) => this.activity(...args),
+      dispatchAgentHook: this.dispatchAgentHook,
+    };
+  }
+
   private runWorkspaceHooks = (
-    event: HookConfig["event"],
-    hookIds: string[],
+    event: HookEvent,
+    hookIds: string[] | null,
     repo: Repo,
     workspace: Workspace,
-    operationId: string,
-  ) =>
-    runWorkspaceHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      hookIds,
-      repo,
-      workspace,
-      operationId,
-    });
+    operationId: string | null,
+    payload?: unknown,
+  ) => runWorkspaceHooks({ ...this.hooksDeps(), event, hookIds, repo, workspace, operationId, payload });
 
   private runNotificationHooks = (
-    event: HookConfig["event"],
+    event: HookEvent,
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) =>
-    runNotificationHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      repo,
-      workspace,
-      operationId,
-      payload,
-    });
+  ) => runNotificationHooks({ ...this.hooksDeps(), event, repo, workspace, operationId, payload });
+
+  private dispatchAgentHook: DispatchAgentHook = (input) =>
+    dispatchAgentHookImpl(buildDispatchAgentHookDeps(this.config, this.createAgentSession), input);
 
   // Binds the class's private helpers as deps for the extracted
   // create-workspace / remove-workspace modules. Built once per call so
@@ -558,7 +775,26 @@ export class OperationService {
       activity: (...args) => this.activity(...args),
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
-      onSessionStopped: (sessionId) => this.terminalHooks.onSessionStopped?.(sessionId),
+      runAutoTransitions: this.runAutoTransitionsDep,
+    };
+  }
+
+  private planDeps(): workspacePlans.WorkspacePlanDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
+    };
+  }
+
+  private managerDeps(): workspaceManager.WorkspaceManagerDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
     };
   }
 }
+
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { runDoctorChecks } from "./doctor.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export type { DeployHookStatus, DoctorConfig, DoctorDeps, DoctorProviderProbe, DoctorProviderStatus, DoctorRepo } from "./doctor.js";

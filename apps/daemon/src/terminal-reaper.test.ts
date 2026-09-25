@@ -96,6 +96,30 @@ describe("startTerminalReaper", () => {
     handle.stop();
   });
 
+  it("reaps tmux clients across configured sockets", () => {
+    const deadPid = pickDeadPid();
+    const detached: string[] = [];
+    const listClients = vi.fn((socketName?: string | null) =>
+      socketName === "citadel-ws-a" ? `/dev/pts/8 ${deadPid}\n` : `/dev/pts/7 ${process.pid}\n`,
+    );
+    const detachClient = vi.fn((tty: string, socketName?: string | null) => detached.push(`${socketName}:${tty}`));
+
+    const handle = startTerminalReaper({
+      reapIntervalMs: REAP_MS,
+      rotateIntervalMs: ROTATE_MS,
+      listSocketNames: () => [null, "citadel-ws-a"],
+      listClients,
+      detachClient,
+      sweepPtyLogs: vi.fn(() => ({ scanned: 0, removed: 0 })),
+    });
+    vi.advanceTimersByTime(REAP_MS);
+
+    expect(listClients).toHaveBeenCalledWith(null);
+    expect(listClients).toHaveBeenCalledWith("citadel-ws-a");
+    expect(detached).toEqual(["citadel-ws-a:/dev/pts/8"]);
+    handle.stop();
+  });
+
   it("returns a no-op handle when CITADEL_DISABLE_TERMINAL_REAPER=1", () => {
     vi.stubEnv("CITADEL_DISABLE_TERMINAL_REAPER", "1");
     const deadPid = pickDeadPid();

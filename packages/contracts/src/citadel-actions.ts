@@ -1,7 +1,8 @@
 import { z } from "zod";
 
-// Citadel Actions — configurable prompt presets surfaced in Settings and used
-// by the scratchpad's Refine button (and the `refine_scratchpad` MCP tool).
+// Citadel Actions — configurable prompt + preferred-runtime presets surfaced
+// in Settings and used by the scratchpad's Refine button (and the
+// `refine_scratchpad` MCP tool).
 // Storage lives in `<dataDir>/citadel-actions.json`, mutex-serialized.
 export const CitadelActionSchema = z.object({
   id: z.string().min(1).max(80),
@@ -9,6 +10,7 @@ export const CitadelActionSchema = z.object({
   description: z.string().max(280).default(""),
   icon: z.string().max(40).default(""),
   promptTemplate: z.string().min(1).max(16_000),
+  runtimeId: z.string().min(1).max(80).default("claude-code"),
   builtIn: z.boolean().default(false),
   updatedAt: z.string(),
 });
@@ -20,6 +22,7 @@ export const UpdateCitadelActionInputSchema = z.object({
   description: z.string().max(280).optional(),
   icon: z.string().max(40).optional(),
   promptTemplate: z.string().min(1).max(16_000).optional(),
+  runtimeId: z.string().min(1).max(80).optional(),
   updatedAt: z.string(),
 });
 
@@ -30,6 +33,7 @@ export const CreateCitadelActionInputSchema = z.object({
   description: z.string().max(280).default(""),
   icon: z.string().max(40).default(""),
   promptTemplate: z.string().min(1).max(16_000),
+  runtimeId: z.string().min(1).max(80).default("claude-code"),
 });
 
 export type CreateCitadelActionInput = z.infer<typeof CreateCitadelActionInputSchema>;

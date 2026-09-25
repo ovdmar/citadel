@@ -3,6 +3,7 @@
 // stack of auto-dismissing notifications driven by React context.
 
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import "./toast.css";
 
 type ToastTone = "info" | "error";
 

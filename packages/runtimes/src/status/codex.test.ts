@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
-import { codexStatusAdapter } from "./codex.js";
-import type { ObservationContext, SessionAdapterState } from "./index.js";
+import { codexStatusAdapter, parseCodexUsageLimitReset } from "./codex.js";
+import type { ObservationContext, PaneObservationResult, SessionAdapterState } from "./index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(here, "..", "fixtures", "codex");
@@ -29,6 +29,10 @@ function observeStatus(state: SessionAdapterState, context: ObservationContext) 
   return observed.observed;
 }
 
+function observeResult(state: SessionAdapterState, context: ObservationContext): PaneObservationResult | null {
+  return codexStatusAdapter.observe(state, context);
+}
+
 describe("codexStatusAdapter", () => {
   let state: SessionAdapterState;
 
@@ -48,13 +52,14 @@ describe("codexStatusAdapter", () => {
       ).toBe("idle");
     });
 
-    it("does not classify running-mid-stream.txt as running from activity alone", () => {
+    it("classifies running-mid-stream.txt as running when current turn output changes", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
       expect(
         observeStatus(
           state,
           ctx(load("running-mid-stream"), { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
         ),
-      ).toBeNull();
+      ).toBe("running");
     });
 
     it("classifies idle-post-turn-divider.txt as idle immediately on the divider (no null window)", () => {
@@ -81,6 +86,91 @@ describe("codexStatusAdapter", () => {
           ctx(load("running-spinner"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
         ),
       ).toBe("running");
+    });
+
+    it("classifies usage-limited.txt as usage_limited with parsed resetAt in reason", () => {
+      const now = new Date(2026, 4, 31, 14, 30);
+      const resetAt = new Date(2026, 4, 31, 15, 0, 0, 0).toISOString();
+      const result = observeResult(state, ctx(load("usage-limited"), { now: () => now }));
+      expect(result).not.toBeNull();
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe(`pane:usage_limited:reset=${resetAt}`);
+    });
+  });
+
+  describe("usage-limit banner detection", () => {
+    it("parses Codex's 12-hour reset time in the daemon local timezone", () => {
+      expect(
+        parseCodexUsageLimitReset(
+          "You've hit your usage limit. Please try again at 3:00 PM.",
+          new Date(2026, 4, 31, 14, 30),
+        ),
+      ).toBe(new Date(2026, 4, 31, 15, 0, 0, 0).toISOString());
+    });
+
+    it("surfaces past same-day reset times as-is so stale banners are due for wakeup", () => {
+      expect(
+        parseCodexUsageLimitReset(
+          "You've hit your usage limit. Please try again at 3:00 PM.",
+          new Date(2026, 4, 31, 16, 0),
+        ),
+      ).toBe(new Date(2026, 4, 31, 15, 0, 0, 0).toISOString());
+    });
+
+    it("parses a wrapped banner when the reset phrase lands on a continuation line", () => {
+      const pane = [
+        "› do the task",
+        "",
+        "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage",
+        "  to purchase more credits or try again at 3:00 PM.",
+        "",
+        "  gpt-5.5 xhigh · ~/Workspace/citadel",
+      ].join("\n");
+      const resetAt = new Date(2026, 4, 31, 15, 0, 0, 0).toISOString();
+      const result = observeResult(state, ctx(pane, { now: () => new Date(2026, 4, 31, 14, 30) }));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe(`pane:usage_limited:reset=${resetAt}`);
+    });
+
+    it("reports usage_limited with reset=unknown when Codex omits the retry time", () => {
+      const pane = "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage\n";
+      const result = observeResult(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe("pane:usage_limited:reset=unknown");
+    });
+
+    it("keeps the current turn usage-limited even if Codex also paints a post-turn divider", () => {
+      const pane = [
+        "› do the task",
+        "",
+        "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage or try again at 3:00 PM.",
+        "",
+        "─ Worked for 0s ──────────────────────",
+        "",
+        "  gpt-5.5 xhigh · ~/Workspace/citadel",
+      ].join("\n");
+      const result = observeResult(state, ctx(pane, { now: () => new Date(2026, 4, 31, 14, 30) }));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+    });
+
+    it("does not let an old usage-limit banner override newer assistant output", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
+      const pane = [
+        "› old task",
+        "■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage or try again at 3:00 PM.",
+        "",
+        "› new task after reset",
+        "",
+        "• I can work again now.",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 xhigh · ~/Workspace/citadel",
+      ].join("\n");
+      expect(observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true }))).toBe("running");
     });
   });
 
@@ -134,7 +224,8 @@ describe("codexStatusAdapter", () => {
       ).toBe("idle");
     });
 
-    it("prompt text after a post-turn divider still reports idle, even with fresh pane activity", () => {
+    it("new assistant output after an old post-turn divider reports running", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
       const pane = [
         "previous output",
         "─ Worked for 1m 12s ──────────────────────",
@@ -148,7 +239,23 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBe("running");
+    });
+
+    it("typed prompt after an old post-turn divider does not report running before assistant output", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
+      const pane = [
+        "previous output",
+        "─ Worked for 1m 12s ──────────────────────",
+        "",
+        "› Start another task.",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 default · ~/wherever",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBeNull();
     });
 
     it("current-turn post divider after the latest prompt still reports idle immediately", () => {
@@ -233,10 +340,10 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBeNull();
     });
 
-    it("answer text mentioning esc to interrupt after a completed turn stays idle", () => {
+    it("answer text mentioning esc to interrupt after a completed turn does not report running", () => {
       const pane = [
         "• You’re right. I fixed it so Codex no longer treats tmux activity as running.",
         "",
@@ -251,7 +358,7 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBeNull();
     });
 
     it("stability of exactly 1 tick → null (not yet enough to call idle)", () => {

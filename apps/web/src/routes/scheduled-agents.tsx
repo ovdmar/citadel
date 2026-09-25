@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Clock, Moon, Sun } from "lucide-react";
+import { ArrowLeft, Clock } from "lucide-react";
 import { useEventRefresh, useStateQuery } from "../app-state.js";
 import { ScheduledAgentsPanel } from "../settings-scheduled-agents.js";
-import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
+import { ThemeControls } from "../theme-controls.js";
 
 export function ScheduledAgentsView() {
   const state = useStateQuery();
@@ -32,7 +32,7 @@ export function ScheduledAgentsView() {
         <div />
 
         <div className="set-top-right">
-          <ThemeToggle />
+          <ThemeControls />
           <Link to="/settings" className="set-top-link">
             Settings
           </Link>
@@ -57,21 +57,5 @@ export function ScheduledAgentsView() {
         <ScheduledAgentsPanel state={state.data} />
       </main>
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={() => applyThemePreference(isDark ? "light" : "dark")}
-      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label="Toggle theme"
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }

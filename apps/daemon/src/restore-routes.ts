@@ -1,5 +1,5 @@
 // Restore lost agent conversations. Sources its candidate list from the DB —
-// every agent_sessions row whose runtime emitted a UUID (claude-code via
+// every workspace_sessions row whose runtime emitted a UUID (claude-code via
 // --session-id, codex via discoverCodexSessionId, or backfilled from a
 // transcript scan) is potentially resumable. We surface as candidates the
 // workspaces whose most-recent session is stopped + has a recorded UUID,
@@ -17,6 +17,7 @@ import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import {
   claudeProjectsDir,
+  codexHomeForWorkspace,
   findCodexRolloutForSession,
   parseClaudeTranscript,
   parseCodexRollout,
@@ -90,7 +91,7 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
       const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
       if (live) return res.status(409).json({ error: "session_already_live", sessionId: live.id });
 
-      const runtime = config.runtimes.find((r) => r.id === candidate.runtimeId);
+      const runtime = config.agentRuntimes.find((r) => r.id === candidate.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found", runtimeId: candidate.runtimeId });
       if (!runtime.resumeArg) {
         return res.status(400).json({ error: "runtime_does_not_support_resume", runtimeId: candidate.runtimeId });
@@ -102,6 +103,7 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
           runtimeId: candidate.runtimeId,
           displayName: candidate.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          resumeSourceSessionId: candidate.id,
           // Inherit the source row's tab slot so the cockpit places the
           // restored conversation back where it lived before. Fallback to the
           // source row id keeps ordering stable for legacy rows whose tab_id
@@ -124,8 +126,8 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
       // older createdAt) and — worse — opening it triggers the terminal's
       // attach handler which ensureTmuxSession-creates a fresh empty pane
       // under the old name. The result is two tabs per conversation, one
-      // resumed and one bare-shell. stopAgentSession cleans up tmux + DB +
-      // ttyd in one call; best-effort, never blocks the response.
+      // resumed and one bare-shell. stopAgentSession cleans up tmux + DB in
+      // one call; best-effort, never blocks the response.
       try {
         operations.stopAgentSession({ sessionId: candidate.id });
         emit("agent.updated", { workspaceId: workspace.id, sessionId: candidate.id });
@@ -216,6 +218,7 @@ function backfillCodexRuntimeSessionId(
     const rolloutPath = findCodexRolloutForSession({
       workspacePath,
       sessionStartedAt: session.createdAt,
+      codexHome: codexHomeForWorkspace(session.workspaceId),
     });
     if (!rolloutPath) return null;
     const { meta } = parseCodexRollout(rolloutPath);

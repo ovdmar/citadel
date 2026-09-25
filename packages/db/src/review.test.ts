@@ -2,20 +2,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SqliteStore } from "./index.js";
+import { CURRENT_SCHEMA_VERSION, SqliteStore } from "./index.js";
 
 const dirs: string[] = [];
+const stores: SqliteStore[] = [];
 
 afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
+
+function openStore(_databasePath: string) {
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
+  return store;
+}
 
 type Fixture = { dir: string; store: SqliteStore; repoId: string; workspaceId: string };
 
 function makeStore(): Fixture {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-review-db-"));
   dirs.push(dir);
-  const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+  const store = openStore(path.join(dir, "citadel.sqlite"));
   store.migrate();
   const now = new Date().toISOString();
   store.insertRepo({
@@ -267,18 +275,20 @@ describe("review_suggestion_runs", () => {
 });
 
 describe("schema_migrations", () => {
-  it("includes the review-system row at version 13", () => {
+  it("includes the review-system row at the current schema version", () => {
     const f = makeStore();
     const rows = f.store.query<{ version: number; name: string }>(
-      "SELECT version, name FROM schema_migrations WHERE version = 13",
+      `SELECT version, name FROM schema_migrations WHERE version = ${CURRENT_SCHEMA_VERSION}`,
     );
-    expect(rows).toEqual([{ version: 13, name: "review-system" }]);
+    expect(rows).toEqual([{ version: CURRENT_SCHEMA_VERSION, name: "review-system" }]);
   });
 
   it("is idempotent — re-running migrate is a no-op", () => {
     const f = makeStore();
     f.store.migrate();
     const rows = f.store.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(rows.map((r) => r.version)).toEqual(
+      Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1),
+    );
   });
 });

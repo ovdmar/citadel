@@ -137,7 +137,8 @@ export function registerScratchpadRoutes(input: {
   });
 
   // Refine scratchpad — launches an agent with the saved Citadel Action prompt
-  // (or an override). Full degradation matrix lives in `scratchpad-refine.ts`.
+  // (or an override) and preferred runtime. Full degradation matrix lives in
+  // `scratchpad-refine.ts`.
   // Requires store + operations + providerHealth — only registered when the
   // caller supplied them (vitest fixtures that don't need refine can omit).
   if (store && operations && providerHealth) {

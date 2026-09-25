@@ -33,12 +33,14 @@
 // Account-wide rate-limit detection: the `isAccountRateLimited` dep returns
 // a non-null value when the operator is in a "you're out of credits until
 // HH:MM" window. When set, every per-session resume is postponed (no sends,
-// no DB writes for in-progress rate_limited sessions).
+// no DB writes for in-progress rate_limited sessions). Reset-bound
+// usage_limited sessions are resumed by the daemon's one-shot background
+// scheduled-agent path, not by this per-session backoff loop.
 
 import type { AgentSession } from "@citadel/contracts";
 import type { SendMessageResult, SendMessageSource } from "./agent-messages.js";
 import { type GuardedIntervalHandle, startGuardedInterval } from "./guarded-interval.js";
-import { type AccountRateLimitInfo, parseUsageLimitResetFromReason } from "./usage-limit.js";
+import type { AccountRateLimitInfo } from "./usage-limit.js";
 
 // Ten generic resume nudges. We never reuse the agent's original prompt
 // because the runtime already has the conversation history; a short
@@ -91,8 +93,8 @@ export interface AutoResumeDeps {
       lastResumeFromRateLimitAt?: string | null;
     },
   ): void;
-  // Future hook: when account-wide rate-limit detection lands, returning a
-  // non-null value postpones every auto-resume until reset.
+  // Returning a non-null value postpones server-rate-limit auto-resumes while
+  // the account-wide usage cap is still active.
   isAccountRateLimited?(): AccountRateLimitInfo | null;
   // Runtime health gate for forced resume nudges. When a runtime is unhealthy
   // (missing command, failed auth/billing probe, etc.), the loop must not send
@@ -170,47 +172,11 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
 
   for (const session of sessions) {
     if (session.status === "usage_limited") {
-      if (!runtimeCanResume(session.runtimeId)) continue;
-      // Account-wide cap: wait until the reset wall-clock passes, then send
-      // a single nudge to wake the agent. No backoff escalation — the reset
-      // moment is deterministic, and if the agent is still capped after the
-      // nudge the next pane observation re-stamps usage_limited with the
-      // next reset and we re-enter this branch.
-      const resetAt = parseUsageLimitResetFromReason(session.statusReason);
-      if (resetAt === null) continue; // Unknown reset — let the wall clock catch up.
-      const resetMs = Date.parse(resetAt);
-      if (resetMs > nowMs) continue; // Reset still in the future — wait.
-      // Idempotency gate: if we already nudged for this reset cycle (the
-      // banner is stale because Claude doesn't auto-refresh once the reset
-      // has elapsed), skip. The pane observation will re-stamp statusReason
-      // with a newer reset if the agent is still capped — that newer reset
-      // will be > lastResumeFromRateLimitAt and we'll consider nudging
-      // again at that point.
-      const last = session.lastResumeFromRateLimitAt;
-      if (last !== null && last !== undefined) {
-        const lastMs = Date.parse(last);
-        if (Number.isFinite(lastMs) && lastMs >= resetMs) continue;
-      }
-      const prompt = pickResumePrompt(rng);
-      let sendOk = false;
-      try {
-        const sendResult = await deps.sendAgentMessage({
-          sessionId: session.id,
-          message: prompt,
-          source: "system",
-          optimistic: false,
-        });
-        sendOk = Boolean(sendResult.ok);
-        if (!sendOk) {
-          deps.logger?.warn?.(`[auto-resume] usage-limit nudge failed for ${session.id}: ${sendResult.error ?? "?"}`);
-        }
-      } catch (err) {
-        deps.logger?.warn?.(`[auto-resume] usage-limit nudge threw for ${session.id}: ${String(err)}`);
-      }
-      if (sendOk) {
-        deps.updateRateLimitResume(session.id, { lastResumeFromRateLimitAt: nowDate.toISOString() });
-        result.resumed += 1;
-      }
+      // Reset-bound usage limits are account-wide. The daemon schedules a
+      // single one-shot background agent for reset+60s that resumes every
+      // still-limited session together. Keep this loop out of that path so it
+      // does not race the scheduled background run with direct per-session
+      // sends.
       continue;
     }
 

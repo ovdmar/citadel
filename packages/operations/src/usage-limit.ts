@@ -6,11 +6,10 @@
 // banner. These helpers parse that encoding back into a wall-clock reset
 // moment and derive an account-wide snapshot from the session list.
 //
-// The auto-resume loop is expected to call `deriveAccountUsageLimit` once
-// per tick (via its `isAccountRateLimited` hook) so that per-session
-// rate_limited resumes are postponed while the account is capped, and so
-// usage_limited sessions themselves can be nudged once the reset wall-clock
-// passes.
+// The auto-resume loop calls `deriveAccountUsageLimit` once per tick (via its
+// `isAccountRateLimited` hook) so per-session `rate_limited` retries are
+// postponed while the account is capped. The daemon also uses the parsed reset
+// to schedule one background resume run at reset+60s.
 
 import type { AgentSession } from "@citadel/contracts";
 

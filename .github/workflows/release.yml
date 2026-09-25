@@ -1,0 +1,52 @@
+name: Release
+
+# Triggered when an annotated tag shaped v<x>.<y>.<z> is pushed. Runs the full
+# `make check` gate *before* `gh release create` so a broken commit cannot
+# poison the upgrade flow. On failure, the operator deletes the tag and
+# re-cuts (see docs/operations/install.md → Failed-release recovery).
+#
+# No artifacts are uploaded — Citadel installs from a source checkout, so the
+# git tag IS the artifact. The release-notes body is GitHub-generated from
+# PRs between this tag and the previous one.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install host tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 tmux
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Gate. If make check fails, no release is published.
+      # Operator recovery: `git push --delete origin <tag>`, fix, re-cut.
+      - name: Check (gates release publication)
+        run: make check
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes

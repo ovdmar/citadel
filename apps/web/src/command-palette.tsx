@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, ClipboardList, GitBranch, GitPullRequest, Search, Settings } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatLabel } from "./labels.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export type CommandPaletteProps = {
   workspaces: Workspace[];
@@ -32,6 +33,7 @@ export function CommandPalette(props: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useOverlayPresent();
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -39,7 +41,7 @@ export function CommandPalette(props: CommandPaletteProps) {
 
   const results = useMemo<Hit[]>(() => {
     const haystack = props.workspaces.map((workspace) => {
-      const repoName = props.repoNames[workspace.repoId] ?? "";
+      const repoName = workspace.repoId ? (props.repoNames[workspace.repoId] ?? "") : "";
       const meta = props.workspaceMeta[workspace.id] ?? {};
       const tokens = [
         workspace.name,
@@ -162,7 +164,9 @@ export function CommandPalette(props: CommandPaletteProps) {
                 <strong>{hit.workspace.name}</strong>
                 <span className="command-result-meta">{hit.hint}</span>
               </span>
-              <span className="command-result-hint">{props.repoNames[hit.workspace.repoId] ?? ""}</span>
+              <span className="command-result-hint">
+                {hit.workspace.repoId ? (props.repoNames[hit.workspace.repoId] ?? "") : ""}
+              </span>
             </button>
           ))}
           {!results.length && query.trim() ? (

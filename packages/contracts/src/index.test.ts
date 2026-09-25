@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentHookFrontmatterSchema,
   AgentRuntimeSchema,
   AgentSessionSchema,
   AppEventSchema,
@@ -8,10 +9,16 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateScheduledAgentInputSchema,
+  CreateTerminalSessionInputSchema,
   CreateWorkspaceInputSchema,
+  HookEventSchema,
   HookOutputSchema,
+  IssueSearchResponseSchema,
+  IssueSearchResultSchema,
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
+  JiraAutoTransitionEventSchema,
+  JiraAutoTransitionSchema,
   OperationSchema,
   PrMergeStateStatusSchema,
   PrReviewerSchema,
@@ -22,12 +29,15 @@ import {
   RuntimeUsageSummarySchema,
   ScheduledAgentRunSchema,
   ScheduledAgentSchema,
+  TerminalProfileSchema,
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
   WorkspaceReadinessSchema,
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
+  WorkspaceSessionSchema,
+  WorkspacesPrStateResponseSchema,
 } from "./index.js";
 
 const timestamp = "2026-05-17T00:00:00.000Z";
@@ -56,9 +66,10 @@ describe("contract schemas", () => {
     });
     const session = AgentSessionSchema.parse({
       id: "sess_test",
+      kind: "agent",
       workspaceId: workspace.id,
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       transport: "connected",
       tmuxSessionName: "citadel_test",
@@ -69,13 +80,38 @@ describe("contract schemas", () => {
 
     expect(repo.defaultBranch).toBe("main");
     expect(workspace.section).toBe("backlog");
-    expect(session.runtimeId).toBe("shell");
+    expect(session.kind).toBe("agent");
+    expect(session.runtimeId).toBe("claude-code");
+    expect(session.terminalBackend).toBe("tmux");
+    const terminal = WorkspaceSessionSchema.parse({
+      id: "sess_terminal",
+      kind: "terminal",
+      workspaceId: workspace.id,
+      runtimeId: null,
+      displayName: "Terminal",
+      status: "running",
+      transport: "connected",
+      tmuxSessionName: "citadel_terminal",
+      tmuxSessionId: "$2",
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+      ptyLastSeenAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(terminal.kind).toBe("terminal");
+    expect(terminal.terminalBackend).toBe("pty-daemon");
+    expect(terminal.ptySessionId).toBe("pty_sess_terminal");
+    expect(WorkspaceSessionSchema.safeParse({ ...terminal, runtimeId: "codex" }).success).toBe(false);
   });
 
   it("validates command inputs and provider/status contracts", () => {
     expect(CreateRepoInputSchema.parse({ rootPath: "/tmp/repo" }).rootPath).toBe("/tmp/repo");
     expect(CreateWorkspaceInputSchema.parse({ repoId: "repo_test", name: "Work" }).source).toBe("scratch");
-    expect(CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "shell" }).runtimeId).toBe("shell");
+    expect(CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "codex" }).runtimeId).toBe("codex");
+    expect(CreateTerminalSessionInputSchema.parse({ workspaceId: "ws_test" }).workspaceId).toBe("ws_test");
 
     expect(
       ProviderHealthSchema.parse({
@@ -110,9 +146,9 @@ describe("contract schemas", () => {
     ).toBe("workspace.updated");
     expect(
       AgentRuntimeSchema.parse({
-        id: "shell",
-        displayName: "Shell",
-        command: "bash",
+        id: "codex",
+        displayName: "Codex",
+        command: "codex",
         health: "healthy",
         capabilities: {
           supportsPrompt: true,
@@ -126,6 +162,9 @@ describe("contract schemas", () => {
         },
       }).args,
     ).toEqual([]);
+    expect(TerminalProfileSchema.parse({ displayName: "Terminal", command: "bash", args: ["-l"] }).args).toEqual([
+      "-l",
+    ]);
     expect(WorkspaceDiffSchema.parse({ workspaceId: "ws_test", clean: true, files: [], truncated: false }).clean).toBe(
       true,
     );
@@ -258,11 +297,60 @@ describe("contract schemas", () => {
     ).toBe("31");
   });
 
+  it("validates the Jira picker search-result and search-response shapes", () => {
+    expect(
+      IssueSearchResultSchema.parse({
+        key: "MS-1",
+        summary: "Pick me",
+        status: "In Progress",
+        url: "https://jira.example/browse/MS-1",
+        updated: timestamp,
+      }).key,
+    ).toBe("MS-1");
+    // `key` is the only required field — every other field tolerates null,
+    // matching jtk's loose output (older jtk omits `updated`, statuses can
+    // be empty during transitions).
+    expect(
+      IssueSearchResultSchema.parse({ key: "MS-2", summary: null, status: null, url: null, updated: null }).summary,
+    ).toBeNull();
+    expect(IssueSearchResultSchema.safeParse({ key: "" }).success).toBe(false);
+
+    const response = IssueSearchResponseSchema.parse({
+      status: "healthy",
+      reason: null,
+      results: [{ key: "MS-1", summary: "Pick me", status: "In Progress", url: null, updated: timestamp }],
+    });
+    expect(response.results).toHaveLength(1);
+
+    // Degraded responses carry an empty results array + a reason — the
+    // picker UI distinguishes "search failed" from "search returned no
+    // matches".
+    expect(IssueSearchResponseSchema.parse({ status: "degraded", reason: "jtk not found", results: [] }).status).toBe(
+      "degraded",
+    );
+  });
+
+  it("rejects auto-transition events outside the supported enum", () => {
+    expect(JiraAutoTransitionEventSchema.safeParse("agent.started").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.issue_attached").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.archived").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.removed").success).toBe(true);
+    // Deliberately excluded — fires before any issue can be attached.
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.created").success).toBe(false);
+    // Deliberately excluded — multi-fire, would burst Jira.
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.updated").success).toBe(false);
+
+    expect(JiraAutoTransitionSchema.parse({ event: "agent.started", transition: "In Progress" }).transition).toBe(
+      "In Progress",
+    );
+    expect(JiraAutoTransitionSchema.safeParse({ event: "agent.started", transition: "" }).success).toBe(false);
+  });
+
   it("requires cron for recurring scheduled agents and runAt for one-shots", () => {
     const base = {
       name: "Sweep",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       workspaceStrategy: "new" as const,
       workspaceName: "sweep",
     };
@@ -307,7 +395,7 @@ describe("contract schemas", () => {
       name: "BG",
       cron: "0 9 * * *",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "codex",
       workspaceStrategy: "new" as const,
       workspaceName: "bg-prefix",
     };
@@ -352,7 +440,7 @@ describe("contract schemas", () => {
       name: "Daily",
       cron: "0 9 * * *",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       workspaceStrategy: "new",
       workspaceName: "daily",
       createdAt: timestamp,
@@ -581,5 +669,109 @@ describe("contract schemas", () => {
         freshness: { checkedAt: timestamp, stale: false, degraded: false },
       }).state,
     ).toBe("pr-conflicts");
+  });
+
+  it("accepts checkout-level PR state as a backwards-compatible additive response field", () => {
+    const legacy = WorkspacesPrStateResponseSchema.parse({ workspacePrState: {} });
+    expect(legacy.checkoutPrState).toEqual({});
+
+    const response = WorkspacesPrStateResponseSchema.parse({
+      workspacePrState: {},
+      checkoutPrState: {
+        ws_1: {
+          co_1: {
+            pullRequest: null,
+            ciRuns: [],
+            checkedAt: null,
+            cachedAt: null,
+          },
+        },
+      },
+    });
+    expect(response.checkoutPrState.ws_1?.co_1?.pullRequest).toBeNull();
+  });
+});
+
+describe("HookEventSchema", () => {
+  it("accepts all canonical hook events including the new framework events", () => {
+    const events = [
+      "workspace.setup",
+      "workspace.teardown",
+      "workspace.apps",
+      "workspace.action",
+      "workspace.created",
+      "workspace.archived",
+      "workspace.removed",
+      "agent.started",
+      "pr.merge",
+      "merge.conflict.detected",
+      "review.requested",
+    ];
+    for (const event of events) {
+      expect(HookEventSchema.parse(event)).toBe(event);
+    }
+  });
+
+  it("rejects 'deploy' — deploy is a file-name convention, not a hook event", () => {
+    expect(() => HookEventSchema.parse("deploy")).toThrow();
+  });
+
+  it("rejects unknown event names", () => {
+    expect(() => HookEventSchema.parse("not.a.real.event")).toThrow();
+  });
+});
+
+describe("AgentHookFrontmatterSchema", () => {
+  it("accepts empty frontmatter (all fields optional)", () => {
+    expect(AgentHookFrontmatterSchema.parse({})).toEqual({});
+  });
+
+  it("accepts runtime and displayName", () => {
+    expect(AgentHookFrontmatterSchema.parse({ runtime: "claude-code", displayName: "Hootsuite: notify" })).toEqual({
+      runtime: "claude-code",
+      displayName: "Hootsuite: notify",
+    });
+  });
+
+  it("rejects reserved key 'model' (CreateAgentSessionInput has no model field yet; would be silently dropped)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ model: "opus" })).toThrow();
+  });
+
+  it("rejects reserved key 'target' (strict mode catches unknown keys)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ target: "fresh" })).toThrow();
+  });
+
+  it("rejects reserved key 'blocking'", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ blocking: true })).toThrow();
+  });
+
+  it("rejects unknown keys (forward-compat: contract is closed)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ foo: "bar" })).toThrow();
+  });
+
+  it("rejects displayName with invalid charset", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "no/slashes" })).toThrow();
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "no\ttabs" })).toThrow();
+  });
+
+  it("rejects displayName longer than 80 chars", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "x".repeat(81) })).toThrow();
+  });
+});
+
+describe("CreateAgentSessionInputSchema.operationId", () => {
+  it("accepts a session input without operationId (backcompat)", () => {
+    expect(() =>
+      CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "claude-code" }),
+    ).not.toThrow();
+  });
+
+  it("accepts an optional operationId so hook-dispatched sessions can link to the firing op", () => {
+    const parsed = CreateAgentSessionInputSchema.parse({
+      workspaceId: "ws_test",
+      runtimeId: "claude-code",
+      operationId: "op_abc123",
+    });
+    expect(parsed.operationId).toBe("op_abc123");
   });
 });

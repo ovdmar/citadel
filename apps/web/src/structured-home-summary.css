@@ -1,0 +1,154 @@
+.structured-home-summary {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 12px;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-elev), var(--c-bg) 34%);
+  box-shadow: var(--sh-card);
+}
+
+.shs-header,
+.shs-grid,
+.shs-columns,
+.shs-row,
+.shs-metric,
+.shs-manager {
+  display: flex;
+  align-items: center;
+}
+
+.shs-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shs-eyebrow,
+.shs-section h3,
+.shs-metric-label,
+.shs-row-sub {
+  color: var(--c-fg-4);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.shs-header h2 {
+  margin: 2px 0 0;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.shs-manager {
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 999px;
+  color: var(--c-fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.shs-manager.running {
+  color: var(--color-success);
+}
+
+.shs-manager.paused {
+  color: var(--color-warning);
+}
+
+.shs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.shs-metric {
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 7px;
+  background: var(--c-bg-soft);
+}
+
+.shs-metric-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--c-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-accent), transparent 88%);
+}
+
+.shs-metric strong,
+.shs-metric-detail,
+.shs-metric-label {
+  display: block;
+}
+
+.shs-metric strong {
+  margin-top: 1px;
+  color: var(--c-fg);
+  font-size: 13px;
+}
+
+.shs-metric-detail {
+  color: var(--c-fg-3);
+  font-size: 11px;
+}
+
+.shs-columns {
+  align-items: stretch;
+  gap: 10px;
+}
+
+.shs-section {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.shs-section h3 {
+  margin: 0 0 6px;
+}
+
+.shs-list {
+  display: grid;
+  gap: 4px;
+}
+
+.shs-row {
+  gap: 7px;
+  min-height: 26px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-bg-soft), transparent 16%);
+  color: var(--c-fg-2);
+  font-size: 12px;
+}
+
+.shs-row.attention {
+  color: var(--color-warning);
+}
+
+.shs-row-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shs-row-sub {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.shs-empty {
+  padding: 6px;
+  color: var(--c-fg-4);
+  font-size: 12px;
+}

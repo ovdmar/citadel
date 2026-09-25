@@ -30,9 +30,10 @@ export async function submitPrompt(
     submitKey?: string;
     runtimeReadyPredicate?: (cmd: string) => boolean;
     skipVerification?: boolean;
+    socketName?: string | null;
   } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!tmuxSessionExists(sessionName)) return { ok: false, error: "tmux_session_missing" };
+  if (!tmuxSessionExists(sessionName, options.socketName)) return { ok: false, error: "tmux_session_missing" };
   const submitKey = options.submitKey ?? "Enter";
   // Defaults are deliberately generous for cold-start TUIs (Claude Code with
   // MCP servers connecting can paint for 10+ seconds). Tests pass tighter
@@ -42,7 +43,10 @@ export async function submitPrompt(
   try {
     // 1. Runtime-foreground check — best-effort, never blocks the actual send.
     if (options.runtimeReadyPredicate) {
-      await waitForPaneCommand(sessionName, options.runtimeReadyPredicate, { timeoutMs: waitForReadyMs });
+      await waitForPaneCommand(sessionName, options.runtimeReadyPredicate, {
+        timeoutMs: waitForReadyMs,
+        socketName: options.socketName ?? null,
+      });
     }
     // 2. Pane settle pre-paste. Use the silence hook for long waits (TUI cold
     //    start budgets ≥ 5 s where a 1 s silence threshold is cheap insurance),
@@ -50,7 +54,11 @@ export async function submitPrompt(
     //    budget — shell sessions are quiet within milliseconds and shouldn't
     //    have to wait for the silence hook's whole-second minimum.
     const preIdleMs = waitForReadyMs >= 5000 ? 1000 : 200;
-    await waitForTerminalIdle(sessionName, { timeoutMs: waitForReadyMs, idleMs: preIdleMs });
+    await waitForTerminalIdle(sessionName, {
+      timeoutMs: waitForReadyMs,
+      idleMs: preIdleMs,
+      socketName: options.socketName ?? null,
+    });
 
     // Trim trailing newlines so the paste itself never carries an LF the
     // runtime might treat as the submit keystroke — we always rely on the
@@ -68,7 +76,7 @@ export async function submitPrompt(
       // the prompt in the runtime's input box (the first paste DID land — we
       // just can't find the snippet because of wrap/animation). The Enter
       // retry below covers the genuine "Enter didn't submit" failure mode.
-      pasteText(sessionName, text, { bracketed: true });
+      pasteText(sessionName, text, { bracketed: true, socketName: options.socketName ?? null });
       // Post-paste settle: short, because we don't want to delay Enter
       // any longer than necessary, and capture-pane diff handles sub-second
       // idle better than the silence hook anyway.
@@ -76,8 +84,9 @@ export async function submitPrompt(
         timeoutMs: submitDelayMs,
         idleMs: 200,
         pollMs: 60,
+        socketName: options.socketName ?? null,
       });
-      if (wantVerification && verifySnippet !== null && !pasteVisible(sessionName, verifySnippet)) {
+      if (wantVerification && verifySnippet !== null && !pasteVisible(sessionName, verifySnippet, options.socketName)) {
         return { ok: false, error: "paste_not_visible" };
       }
     }
@@ -88,7 +97,7 @@ export async function submitPrompt(
     // didn't submit" from "Enter submitted and the runtime is echoing the
     // history." The pre-paste idle wait + paste-visible verification above
     // are the load-bearing checks; this Enter is the easy part.
-    execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, submitKey]);
+    execFileSync("tmux", [...tmuxPrefix(options.socketName), "send-keys", "-t", sessionName, submitKey]);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "submit_prompt_failed" };
@@ -131,14 +140,18 @@ function collapseWhitespace(text: string): string {
 // input, so the snippet won't be on screen even though the paste landed
 // fine in the runtime's internal buffer. The collapse marker is itself
 // proof the paste was received.
-function pasteVisible(sessionName: string, snippet: string): boolean {
+function pasteVisible(sessionName: string, snippet: string, socketName?: string | null): boolean {
   let captured: string;
   try {
-    captured = execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-J", "-S", "-12", "-t", sessionName], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 256 * 1024,
-    });
+    captured = execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "capture-pane", "-p", "-J", "-S", "-12", "-t", sessionName],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: 256 * 1024,
+      },
+    );
   } catch {
     return false;
   }

@@ -21,7 +21,7 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   factorySpy.mockClear();
   stopSpy.mockClear();
 });
@@ -34,7 +34,7 @@ describe("createDaemonApp ↔ terminal reaper wiring", () => {
   it("invokes startTerminalReaper once and stops it on server close", async () => {
     const { createDaemonApp } = await import("./app.js");
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     await listen(server);
 
     expect(factorySpy).toHaveBeenCalledTimes(1);

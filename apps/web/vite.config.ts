@@ -1,9 +1,21 @@
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+const daemonUrl = process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010";
+const e2eRunId = process.env.CITADEL_E2E_RUN_ID || process.env.CITADEL_PLAYWRIGHT_RUN_ID;
+const e2eHeaders = e2eRunId ? { "X-Citadel-E2E-Run-Id": e2eRunId } : undefined;
+const contractsSrc = fileURLToPath(new URL("../../packages/contracts/src", import.meta.url));
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: [
+      { find: /^@citadel\/contracts$/, replacement: `${contractsSrc}/index.ts` },
+      { find: /^@citadel\/contracts\/(.+)$/, replacement: `${contractsSrc}/$1.ts` },
+    ],
+  },
   build: {
     rollupOptions: {
       output: {
@@ -18,17 +30,12 @@ export default defineConfig({
   server: {
     port: Number(process.env.CITADEL_WEB_PORT) || 5173,
     proxy: {
-      "/api": process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
-      "/events": process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
-      // ttyd-backed terminals: HTTP assets + WS upgrades both proxy through the daemon.
-      "/terminals": {
-        target: process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
-        ws: true,
-        changeOrigin: true,
-      },
-      // Legacy xterm/WebSocket diagnostic gateway (no longer the default renderer).
+      "/api": { target: daemonUrl, headers: e2eHeaders },
+      "/events": { target: daemonUrl, headers: e2eHeaders },
+      // xterm/WebSocket terminal gateway.
       "/terminal": {
-        target: (process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010").replace(/^http/, "ws"),
+        target: daemonUrl.replace(/^http/, "ws"),
+        headers: e2eHeaders,
         ws: true,
       },
     },

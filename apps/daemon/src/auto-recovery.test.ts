@@ -45,9 +45,9 @@ describe("decideAutoRecoveryAction", () => {
     expect(decision.reason).toBe("agent_session_active");
   });
 
-  it("ignores running shell-runtime sessions when deciding if an agent is active", () => {
+  it("ignores running terminal sessions when deciding if an agent is active", () => {
     const decision = decideAutoRecoveryAction(
-      base({ sessions: [{ status: "running", runtimeId: "shell", lastActivityAt: null }] }),
+      base({ sessions: [{ status: "running", runtimeId: null, lastActivityAt: null }] }),
     );
     expect(decision.fire).toBe(true);
   });

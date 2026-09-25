@@ -1,85 +1,84 @@
-// Helpers used by terminal-routes wiring in apps/daemon/src/app.ts.
+// Helpers used by terminal session lifecycle wiring in apps/daemon/src/app.ts.
 // Extracted so app.ts stays under the 800-line file-size cap.
 
-import type http from "node:http";
-import type { CitadelConfig } from "@citadel/config";
-import type { AgentSession } from "@citadel/contracts";
+import { type AgentRuntimeConfig, type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
+import type { AgentSession, WorkspaceSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { type TtydManager, ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
-import type express from "express";
-import { registerTerminalRoutes } from "./terminal-routes.js";
-
-type DiagnosticsSink = {
-  log(category: string, event: string, data?: Record<string, unknown>): void;
-};
+import { prepareCodexHomeForWorkspace } from "@citadel/runtimes";
+import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
+
 function isShellCommand(command: string): boolean {
   return (SHELL_COMMANDS as readonly string[]).includes(command);
 }
 
-function sessionTmuxName(session: AgentSession, workspaceId: string): string {
+function sessionTmuxName(session: WorkspaceSession, workspaceId: string): string {
   return session.tmuxSessionName ?? `citadel_${workspaceId}_${session.id.slice(-8)}`;
 }
 
 function resolveSessionContext(
   store: SqliteStore,
   config: CitadelConfig,
-  session: AgentSession,
-): { workspacePath: string; sessionName: string; runtime: CitadelConfig["runtimes"][number] } | null {
+  session: WorkspaceSession,
+): {
+  workspacePath: string;
+  sessionName: string;
+  socketName: string | null;
+  runtime: AgentRuntimeConfig | null;
+} | null {
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
-  const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
-  if (!workspace || !runtime) return null;
-  return { workspacePath: workspace.path, sessionName: sessionTmuxName(session, workspace.id), runtime };
+  let runtime: AgentRuntimeConfig | null = null;
+  if (session.kind === "agent") {
+    runtime = config.agentRuntimes.find((candidate) => candidate.id === session.runtimeId) ?? null;
+  }
+  if (!workspace || (session.kind === "agent" && !runtime)) return null;
+  return {
+    workspacePath: workspace.path,
+    sessionName: sessionTmuxName(session, workspace.id),
+    socketName: session.tmuxSocketName ?? null,
+    runtime,
+  };
 }
 
-// Recreate the tmux session a terminal needs (operator reconnect after
-// tmux gone). Shell-first three-step: spawn `bash -l`, then send-keys the
-// runtime argv (skipped for the `shell` runtime — bash IS the runtime).
-// Wire the terminal-routes + supporting helpers in one call. Returns the
-// shared recentUserAction map so the status-monitor wiring (separate file)
-// can read it by reference. Keeping the wiring in this helper module
-// rather than inline in app.ts saves the 800-line file-size cap.
-export function wireTerminalRoutes(input: {
-  app: express.Express;
-  server: http.Server;
-  store: SqliteStore;
-  ttyd: TtydManager;
-  dataDir: string;
-  emit: (type: string, payload: unknown) => void;
-  config: CitadelConfig;
-  diagnostics?: DiagnosticsSink;
-}): { recentUserAction: Map<string, number> } {
-  const recentUserAction = new Map<string, number>();
-  registerTerminalRoutes({
-    app: input.app,
-    server: input.server,
-    store: input.store,
-    ttyd: input.ttyd,
-    dataDir: input.dataDir,
-    emit: input.emit,
-    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
-    recentUserAction,
-    respawnTmux: buildRespawnTmux(input.store, input.config),
-    restartAgent: buildRestartAgent(input.store, input.config),
-  });
-  return { recentUserAction };
+function codexEnvForSession(
+  session: AgentSession,
+  _config: CitadelConfig,
+): Record<string, string | null | undefined> | undefined {
+  if (session.runtimeId !== "codex") return undefined;
+  const codexHome = prepareCodexHomeForWorkspace({ workspaceId: session.workspaceId });
+  return {
+    CODEX_HOME: codexHome.home,
+    CODEX_SQLITE_HOME: codexHome.sqliteHome,
+  };
 }
 
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
-): (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null> {
+): (
+  session: WorkspaceSession,
+) => Promise<{ tmuxSessionName: string; tmuxSessionId: string; tmuxSocketName?: string | null } | null> {
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
     if (!ctx) return null;
-    const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
-    if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+    const tmux = await ensureTmuxSession({
+      sessionName: ctx.sessionName,
+      cwd: ctx.workspacePath,
+      socketName: ctx.socketName,
+      terminal: config.terminal,
+    });
+    if (session.kind === "agent" && ctx.runtime && !isShellCommand(ctx.runtime.command)) {
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
-      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv);
+      const env = codexEnvForSession(session, config);
+      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
+        socketName: ctx.socketName,
+        exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
+      });
     }
     return tmux;
   };
@@ -94,18 +93,28 @@ export function buildRespawnTmux(
 export function buildRestartAgent(store: SqliteStore, config: CitadelConfig): (session: AgentSession) => Promise<void> {
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
-    if (!ctx) throw new Error("session_resolution_failed");
-    const pane = panePidProcess(ctx.sessionName);
+    if (!ctx || !ctx.runtime) throw new Error("session_resolution_failed");
+    const pane = panePidProcess(ctx.sessionName, ctx.socketName);
     if (pane && pane.command === ctx.runtime.command.slice(0, 15)) {
       throw new Error("agent_already_running");
     }
-    await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
+    await ensureTmuxSession({
+      sessionName: ctx.sessionName,
+      cwd: ctx.workspacePath,
+      socketName: ctx.socketName,
+      terminal: config.terminal,
+    });
     if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
-      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv);
+      const env = codexEnvForSession(session, config);
+      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
+        socketName: ctx.socketName,
+        exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
+      });
     }
     store.updateSessionStatus(session.id, {
       status: "running",

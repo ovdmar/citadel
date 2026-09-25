@@ -79,7 +79,9 @@ export function bootstrapLastRoute(
 }
 
 function isExcluded(href: string): boolean {
-  const path = href.split("?", 1)[0]?.split("#", 1)[0] ?? href;
+  const url = new URL(href, "http://citadel.local");
+  if (url.searchParams.get("scratchpad") === "1") return true;
+  const path = url.pathname;
   return EXCLUDED_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 

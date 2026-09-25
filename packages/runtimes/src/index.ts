@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import os from "node:os";
-import type { RuntimeConfig } from "@citadel/config";
+import type { AgentRuntimeConfig } from "@citadel/config";
 import type { AgentRuntime } from "@citadel/contracts";
+import { runtimeLaunchOptionCapabilities } from "./launch-profile.js";
 
 export {
   claudeProjectsDir,
@@ -21,6 +22,13 @@ export {
   extractCodexResumeSessionIdFromArgv,
 } from "./transcripts/index.js";
 export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
+export {
+  DEFAULT_CODEX_HOME_ROOT,
+  codexHomeForWorkspace,
+  codexSqliteHomeForWorkspace,
+  prepareCodexHomeForWorkspace,
+  prepareCodexSqliteHomeForWorkspace,
+} from "./codex-sqlite-home.js";
 
 export {
   runtimeUsageFetchers,
@@ -55,6 +63,18 @@ export type {
   ActiveElapsedTimerProbe,
 } from "./status/index.js";
 
+export {
+  renderSystemPromptArgv,
+  resolveRuntimeLaunchProfile,
+  runtimeLaunchOptionCapabilities,
+} from "./launch-profile.js";
+export type {
+  ResolvedLaunchProfile,
+  RuntimeLaunchOptionsInput,
+  RuntimeWithLaunchOptions,
+  SystemPromptArgvMapping,
+} from "./launch-profile.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,
@@ -64,7 +84,7 @@ const baseCapabilities = {
   supportsNonInteractiveGoal: false,
   supportsShell: true,
   supportsUsage: false,
-  // Default is false (shell-style runtimes emit line-buffered text). The
+  // Default is false (simple command runtimes emit line-buffered text). The
   // builtin overrides below flip it on for the known TUI runtimes so the
   // scheduled-agents UI can disable runMode='background' for them.
   supportsTui: false,
@@ -85,6 +105,7 @@ const builtinCapabilities: Record<string, Partial<typeof baseCapabilities>> = {
   codex: {
     supportsPrompt: true,
     supportsResume: true,
+    supportsModelSelection: true,
     supportsNonInteractiveGoal: true,
     supportsTui: true,
     supportsUsage: true,
@@ -97,14 +118,9 @@ const builtinCapabilities: Record<string, Partial<typeof baseCapabilities>> = {
   pi: {
     supportsPrompt: true,
   },
-  shell: {
-    supportsPrompt: true,
-    supportsResume: true,
-    supportsNonInteractiveGoal: true,
-  },
 };
 
-export function capabilitiesForRuntime(runtime: RuntimeConfig) {
+export function capabilitiesForRuntime(runtime: AgentRuntimeConfig) {
   const built = builtinCapabilities[runtime.id] ?? {};
   const explicit: Partial<typeof baseCapabilities> = {};
   if (runtime.supportsPrompt !== undefined) explicit.supportsPrompt = runtime.supportsPrompt;
@@ -130,7 +146,7 @@ export type RuntimeCommandRunner = (
 
 export type RuntimeHealthOptions = {
   commandExists?: (command: string) => boolean;
-  probeClaudeCode?: (runtime: RuntimeConfig) => RuntimeHealthState;
+  probeClaudeCode?: (runtime: AgentRuntimeConfig) => RuntimeHealthState;
 };
 
 const CLAUDE_CODE_HEALTH_PROBE_PROMPT = "Reply with OK.";
@@ -163,9 +179,13 @@ export function clearRuntimeHealthProbeCache() {
   runtimeHealthProbeCache.clear();
 }
 
-export function listRuntimeHealth(configured: RuntimeConfig[], options: RuntimeHealthOptions = {}): AgentRuntime[] {
+export function listRuntimeHealth(
+  configured: AgentRuntimeConfig[],
+  options: RuntimeHealthOptions = {},
+): AgentRuntime[] {
   const checkCommandExists = options.commandExists ?? commandExists;
-  const probeClaude = options.probeClaudeCode ?? ((runtime: RuntimeConfig) => probeClaudeCodeHealth(runtime.command));
+  const probeClaude =
+    options.probeClaudeCode ?? ((runtime: AgentRuntimeConfig) => probeClaudeCodeHealth(runtime.command));
   return configured.map((runtime) => {
     const available = checkCommandExists(runtime.command);
     const healthState = available
@@ -181,6 +201,7 @@ export function listRuntimeHealth(configured: RuntimeConfig[], options: RuntimeH
       health: healthState.health,
       healthReason: healthState.healthReason,
       capabilities: capabilitiesForRuntime(runtime),
+      launchCapabilities: runtimeLaunchOptionCapabilities(runtime),
     };
   });
 }

@@ -11,12 +11,16 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
     bindHost: "127.0.0.1",
     port: 4010,
     mcp: { enabled: true },
-    providers: { github: { enabled: false, command: "gh" }, jira: { enabled: false, command: "jtk" } },
-    runtimes: [
+    providers: {
+      github: { enabled: false, command: "gh" },
+      jira: { enabled: false, command: "jtk", autoTransitions: [] },
+    },
+    agentRuntimes: [
       { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
       { id: "codex", displayName: "Codex", command: "codex", args: [] },
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
     ],
+    agentSessions: { baseSystemPrompt: "" },
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: { fixCi: { ...DEFAULT_FIX_CI_AUTOMATION, ...overrides } },
     repoDefaults: {
@@ -28,15 +32,22 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
     },
     hooks: [],
     commandPolicy: { hookTimeoutMs: 120_000, allowDestructiveWorkspaceCleanup: false },
+    providerRefresh: {
+      enabled: true,
+      workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
+      intervals: { prCiMs: 60_000, ciMs: 5 * 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+      focusRefreshThresholdMs: 30_000,
+      maxConcurrentRefreshes: 4,
+    },
     scratchpad: {},
   };
 }
 
-function runtime(id: string, health: AgentRuntime["health"]): AgentRuntime {
+function runtime(id: string, health: AgentRuntime["health"], command = id): AgentRuntime {
   return {
     id,
     displayName: id,
-    command: id,
+    command,
     args: [],
     health,
     healthReason: health === "healthy" ? null : `${id} unavailable`,
@@ -80,5 +91,14 @@ describe("resolveAutoRecoveryRuntimeId", () => {
         runtime("codex", "healthy"),
       ]),
     ).toBeNull();
+  });
+
+  it("skips healthy shell-like runtimes and falls back to an actual agent runtime", () => {
+    expect(
+      resolveAutoRecoveryRuntimeId(config({ runtimeId: "bash-debug", fallbackRuntimeId: "codex" }), [
+        runtime("bash-debug", "healthy", "/usr/bin/bash"),
+        runtime("codex", "healthy", "codex"),
+      ]),
+    ).toBe("codex");
   });
 });

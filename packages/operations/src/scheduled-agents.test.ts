@@ -10,7 +10,7 @@ import { ScheduledAgentRunner } from "./scheduled-agents.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("ScheduledAgentRunner", () => {
@@ -27,7 +27,7 @@ describe("ScheduledAgentRunner", () => {
     const runner = new ScheduledAgentRunner({
       store,
       operations,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       dataDir: fixture.dir,
     });
 
@@ -35,7 +35,7 @@ describe("ScheduledAgentRunner", () => {
       name: "Daily sweep",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "daily-sweep",
     });
@@ -63,7 +63,8 @@ describe("ScheduledAgentRunner", () => {
     const runner = new ScheduledAgentRunner({
       store,
       operations,
-      getRuntime: (id) => (id === "shell" ? { id, displayName: "Shell", command: "bash", args: [] } : undefined),
+      getRuntime: (id) =>
+        id === "test-agent" ? { id, displayName: "Test Agent", command: "bash", args: [] } : undefined,
       dataDir: fixture.dir,
     });
 
@@ -72,7 +73,7 @@ describe("ScheduledAgentRunner", () => {
         name: "Bad cron",
         cron: "not-a-cron",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "new",
         workspaceName: "bad",
       }),
@@ -105,14 +106,14 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
       dataDir: fixture.dir,
     });
     const agent = runner.create({
       name: "Failing run",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "failing",
     });
@@ -141,7 +142,7 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
       dataDir: fixture.dir,
     });
 
@@ -151,7 +152,7 @@ describe("ScheduledAgentRunner", () => {
       scheduleType: "once",
       runAt: runAt.toISOString(),
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "one-shot",
     });
@@ -188,7 +189,7 @@ describe("ScheduledAgentRunner", () => {
     const runner = new ScheduledAgentRunner({
       store,
       operations,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       dataDir: fixture.dir,
     });
 
@@ -197,7 +198,7 @@ describe("ScheduledAgentRunner", () => {
       name: "Recurring",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "ws",
     });
@@ -225,7 +226,7 @@ describe("ScheduledAgentRunner", () => {
       scheduleType: "once",
       runAt: new Date(2030, 0, 1, 9, 0, 0).toISOString(),
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "ws-once",
     });
@@ -251,7 +252,7 @@ describe("ScheduledAgentRunner", () => {
     const runner = new ScheduledAgentRunner({
       store,
       operations,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       dataDir: fixture.dir,
     });
 
@@ -260,7 +261,7 @@ describe("ScheduledAgentRunner", () => {
         name: "Missing runAt",
         scheduleType: "once",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "new",
         workspaceName: "noop",
       }),
@@ -271,7 +272,7 @@ describe("ScheduledAgentRunner", () => {
         name: "Missing cron",
         scheduleType: "recurring",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "new",
         workspaceName: "noop",
       }),
@@ -293,14 +294,14 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
       dataDir: fixture.dir,
     });
     const agent = runner.create({
       name: "Every minute",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "every-min",
     });
@@ -333,13 +334,13 @@ describe("ScheduledAgentRunner", () => {
       operations,
       dataDir: fixture.dir,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
     });
     const agent = runner.create({
       name: "Runs",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "runs",
     });
@@ -375,13 +376,13 @@ describe("ScheduledAgentRunner", () => {
       operations,
       dataDir: fixture.dir,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
     });
     const agent = runner.create({
       name: "Queue",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "queue",
       overlapPolicy: "queue",
@@ -439,14 +440,14 @@ describe("ScheduledAgentRunner", () => {
       operations,
       dataDir: fixture.dir,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
       recordActivity: (event) => activity.push({ type: event.type }),
     });
     const agent = runner.create({
       name: "Skip",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "skip",
       // overlapPolicy defaults to 'skip'.
@@ -487,13 +488,13 @@ describe("ScheduledAgentRunner", () => {
       operations,
       dataDir: fixture.dir,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
     });
     const skipAgent = runner.create({
       name: "RNskip",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "rn-skip",
     });
@@ -501,7 +502,7 @@ describe("ScheduledAgentRunner", () => {
       name: "RNqueue",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "rn-queue",
       overlapPolicy: "queue",
@@ -558,14 +559,14 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       dataDir: fixture.dir,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       killTmuxSession: (name) => killedSessions.push(name),
     });
     const agent = runner.create({
       name: "Delete",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "del",
     });
@@ -646,13 +647,13 @@ describe("ScheduledAgentRunner", () => {
       operations,
       dataDir: fixture.dir,
       getRuntime: () =>
-        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+        runtimeAvailable ? { id: "test-agent", displayName: "Test Agent", command: "bash", args: [] } : undefined,
     });
     const agent = runner.create({
       name: "Boot",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "boot",
       overlapPolicy: "queue",

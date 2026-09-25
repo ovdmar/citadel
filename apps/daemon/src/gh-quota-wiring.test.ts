@@ -174,4 +174,84 @@ describe("wireGhQuota — viewer-gate helpers", () => {
       }
     }
   });
+
+  it("hydrates scheduler cadence from checkout PR bindings", () => {
+    const sseClients = new Set<express.Response>();
+    const wiring = wireGhQuota({
+      sseClients,
+      store: {
+        listWorkspaces: () => [
+          {
+            id: "ws_structured",
+            repoId: null,
+            name: "Structured",
+            path: "/tmp/ws",
+            branch: "home",
+            baseBranch: "main",
+            source: "scratch",
+            kind: "root",
+            prUrl: null,
+            issueKey: null,
+            issueTitle: null,
+            issueUrl: null,
+            slackThreadUrl: null,
+            section: "backlog",
+            pinned: false,
+            lifecycle: "ready",
+            dirty: false,
+            namespaceId: null,
+            createdAt: "2026-06-05T00:00:00.000Z",
+            updatedAt: "2026-06-05T00:00:00.000Z",
+            archivedAt: null,
+          },
+        ],
+        listRepos: () => [],
+        getWorkspacePrSnapshot: () => null,
+        listWorkspaceCheckouts: () => [
+          {
+            id: "co_api",
+            workspaceId: "ws_structured",
+            repoId: "repo_api",
+            name: "api",
+            path: "/tmp/ws/api",
+            branch: "feature/api",
+            baseBranch: "main",
+            issue: null,
+            intendedPr: {
+              provider: "github",
+              number: 42,
+              url: "https://github.com/owner/api/pull/42",
+              state: "open",
+              headSha: "abc123",
+              baseRef: "main",
+              fetchedAt: "2026-06-05T00:00:00.000Z",
+              checksGreen: true,
+              mergeStateStatus: null,
+              hasConflicts: null,
+            },
+            stackParentCheckoutId: null,
+            inferredPurpose: "implementation",
+            gateStatus: "not_started",
+            createdAt: "2026-06-05T00:00:00.000Z",
+            updatedAt: "2026-06-05T00:00:00.000Z",
+            archivedAt: null,
+          },
+        ],
+      } as never,
+      resolveRepoFullName: (repoId) => (repoId === "repo_api" ? "owner/api" : null),
+    });
+    try {
+      const entry = wiring.scheduler._entries().get("owner/api#42" as never);
+      expect(entry).toMatchObject({
+        repoFullName: "owner/api",
+        prNumber: 42,
+        state: "open",
+        lastHeadSha: "abc123",
+        lastChecksConclusion: "green",
+      });
+      expect(entry?.workspaceIds.has("ws_structured")).toBe(true);
+    } finally {
+      wiring.stop();
+    }
+  });
 });

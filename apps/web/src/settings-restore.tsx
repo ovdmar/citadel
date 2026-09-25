@@ -3,7 +3,7 @@
 // surrounding settings chrome stealing focus.
 //
 // Reads candidates from /api/restore/candidates (every workspace whose
-// most-recent agent_sessions row carries a runtime_session_id but no live
+// most-recent workspace_sessions row carries a runtime_session_id but no live
 // counterpart). For each, renders an inline row with the workspace name,
 // runtime, UUID, and last activity, plus a Restore button that POSTs to
 // /api/restore/run — the server then spawns a new agent session with the

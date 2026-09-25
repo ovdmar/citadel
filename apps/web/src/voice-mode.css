@@ -1,0 +1,293 @@
+.voice-mode-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 1200;
+  width: min(480px, calc(100vw - 24px));
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 0.5px solid var(--c-line-3, var(--line-strong));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-elev, var(--panel-strong)) 94%, transparent);
+  color: var(--c-fg-1, inherit);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset, 0 18px 54px rgb(var(--shadow-color, 0 0 0) / 0.22), 0 2px 10px
+    rgb(var(--shadow-color, 0 0 0) / 0.12);
+  backdrop-filter: blur(18px) saturate(1.05);
+}
+
+.voice-mode-header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-mode-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 0.5px solid var(--c-line-2, var(--line));
+  border-radius: 8px;
+  background: var(--c-dark, var(--color-action));
+  color: var(--c-on-dark, var(--topbar-bg));
+  box-shadow: var(--sh-1, none);
+}
+
+.voice-mode-overlay--listening .voice-mode-mark::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1px solid color-mix(in srgb, var(--c-ok, var(--color-success)) 54%, transparent);
+  border-radius: 10px;
+  animation: voice-mode-pulse 1.4s ease-out infinite;
+}
+
+.voice-mode-title {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.voice-mode-status {
+  overflow: hidden;
+  color: var(--c-fg-1, inherit);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-mode-meta {
+  overflow: hidden;
+  color: var(--c-fg-3, var(--muted));
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-mode-icon-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--c-fg-3, var(--muted));
+  cursor: pointer;
+}
+
+.voice-mode-icon-button:hover,
+.voice-mode-icon-button:focus-visible {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+  color: var(--c-fg-1, inherit);
+  outline: none;
+}
+
+.voice-mode-interim,
+.voice-mode-buffer,
+.voice-mode-empty {
+  min-height: 70px;
+  max-height: min(28vh, 180px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  padding: 10px 11px;
+  border: 0.5px solid var(--c-line-2, var(--line));
+  border-radius: 7px;
+  background: var(--c-card, var(--panel));
+  color: var(--c-fg-1, inherit);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: var(--sh-card, none);
+}
+
+.voice-mode-interim {
+  color: var(--c-fg-2, inherit);
+}
+
+.voice-mode-buffer {
+  border-color: var(--c-line-3, var(--line-strong));
+}
+
+.voice-mode-empty {
+  display: flex;
+  align-items: center;
+  color: var(--c-fg-4, var(--muted));
+}
+
+.voice-mode-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 0.5px solid color-mix(in srgb, var(--c-bad, var(--color-danger)) 32%, transparent);
+  border-radius: 7px;
+  background: var(--c-bad-bg, rgba(239, 68, 68, 0.1));
+  color: var(--c-bad, var(--color-danger));
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.voice-mode-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.voice-mode-controls,
+.voice-mode-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-mode-controls {
+  justify-content: space-between;
+}
+
+.voice-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  gap: 7px;
+  color: var(--c-fg-2, inherit);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.voice-mode-toggle {
+  position: relative;
+  cursor: pointer;
+}
+
+.voice-mode-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.voice-mode-toggle-track {
+  display: inline-flex;
+  align-items: center;
+  width: 34px;
+  height: 19px;
+  padding: 2px;
+  border: 0.5px solid var(--c-line-3, var(--line-strong));
+  border-radius: 999px;
+  background: var(--c-line-2, var(--line));
+  transition: background 0.14s, border-color 0.14s;
+}
+
+.voice-mode-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--c-card, var(--panel));
+  box-shadow: 0 1px 3px rgb(var(--shadow-color, 0 0 0) / 0.22);
+  transform: translateX(0);
+  transition: transform 0.14s;
+}
+
+.voice-mode-toggle input:checked + .voice-mode-toggle-track {
+  border-color: transparent;
+  background: var(--c-dark, var(--color-action));
+}
+
+.voice-mode-toggle input:checked + .voice-mode-toggle-track .voice-mode-toggle-thumb {
+  transform: translateX(15px);
+}
+
+.voice-mode-toggle:focus-within .voice-mode-toggle-track,
+.voice-mode-toggle:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--c-dark, var(--color-action)) 16%, transparent);
+  outline-offset: 2px;
+}
+
+.voice-mode-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.voice-mode-action {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0.5px solid var(--c-line-2, var(--line));
+  border-radius: 7px;
+  background: transparent;
+  color: var(--c-fg-2, inherit);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1;
+}
+
+.voice-mode-action:hover:not(:disabled),
+.voice-mode-action:focus-visible {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+  color: var(--c-fg-1, inherit);
+  outline: none;
+}
+
+.voice-mode-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.voice-mode-action--primary {
+  border-color: transparent;
+  background: var(--c-dark, var(--color-action));
+  color: var(--c-on-dark, var(--topbar-bg));
+}
+
+.voice-mode-action--primary:hover:not(:disabled),
+.voice-mode-action--primary:focus-visible {
+  background: var(--c-dark-2, var(--color-action-hover));
+  color: var(--c-on-dark, var(--topbar-bg));
+}
+
+@keyframes voice-mode-pulse {
+  0% {
+    opacity: 0.78;
+    transform: scale(0.98);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+@media (max-width: 560px) {
+  .voice-mode-overlay {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .voice-mode-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .voice-mode-actions {
+    justify-content: stretch;
+  }
+
+  .voice-mode-action {
+    flex: 1 1 auto;
+  }
+}

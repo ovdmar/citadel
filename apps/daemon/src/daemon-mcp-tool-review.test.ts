@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
+const stores: SqliteStore[] = [];
 
 afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -21,7 +23,7 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 describe("daemon MCP review tools", () => {
   it("add_review_comment stamps agent:unknown and refuses caller-supplied author OR runtimeId", async () => {
     const { fixture, workspaceId } = seedFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // Baseline: a plain call with no identity field stamps 'agent:unknown'
@@ -53,7 +55,7 @@ describe("daemon MCP review tools", () => {
 
   it("update_review_comment returns conflict on stale ifUpdatedAtMatches", async () => {
     const { fixture, workspaceId } = seedFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const add = await mcpCall<{ comment: ReviewComment }>(baseUrl, {
@@ -73,7 +75,7 @@ describe("daemon MCP review tools", () => {
 
   it("request_review returns no-hook when nothing configured", async () => {
     const { fixture, workspaceId } = seedFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const resp = await mcpCall<{ error: string }>(baseUrl, {
@@ -88,7 +90,7 @@ describe("daemon MCP review tools", () => {
 
   it("list_review_comments + delete_review_comment round-trip", async () => {
     const { fixture, workspaceId } = seedFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const add = await mcpCall<{ comment: ReviewComment }>(baseUrl, {
@@ -129,10 +131,11 @@ function seedFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
-  const store = new SqliteStore(config.databasePath);
+  config.agentRuntimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true }];
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
   store.migrate();
   const repoPath = path.join(dir, "repo");
   fs.mkdirSync(repoPath, { recursive: true });

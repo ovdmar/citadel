@@ -1,0 +1,18 @@
+Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+⚠ 3 hooks need review before they can run. Open /hooks to review them.
+
+⚠ The posthog MCP server is not logged in. Run `codex mcp login posthog`.
+
+⚠ MCP startup incomplete (failed: posthog)
+
+
+› fix conflicts and push to PR
+
+
+■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:00 PM.
+
+
+› You've hit your usage limit. Visit https://chatgpt.com/codex/settings
+
+  gpt-5.5 xhigh · ~/Workspace/citadel-worktrees/rowdy-pangolin

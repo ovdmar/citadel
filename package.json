@@ -1,6 +1,6 @@
 {
   "name": "citadel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.1.2",
@@ -13,12 +13,12 @@
     "dev:daemon": "pnpm --filter @citadel/daemon dev",
     "dev:web": "pnpm --filter @citadel/web dev",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
-    "check": "pnpm run check:arch && pnpm run check:size && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run coverage && pnpm run check:deps && pnpm run build",
+    "check": "pnpm run check:arch && pnpm run check:size && pnpm run typecheck && pnpm run lint && pnpm run coverage && pnpm run check:deps && pnpm run build",
     "typecheck": "tsc -b tsconfig.json",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage",
+    "test": "NODE_ENV=test vitest run",
+    "coverage": "NODE_ENV=test vitest run --coverage",
     "e2e": "playwright test",
     "test:isolated": "tsx scripts/dev/test-isolated.ts vitest",
     "e2e:isolated": "tsx scripts/dev/test-isolated.ts e2e",
@@ -30,7 +30,12 @@
     "seed": "tsx scripts/dev/seed.ts"
   },
   "dependencies": {
+    "@citadel/config": "workspace:*",
+    "@citadel/contracts": "workspace:*",
+    "@citadel/core": "workspace:*",
     "@citadel/db": "workspace:*",
+    "@citadel/hooks": "workspace:*",
+    "@citadel/operations": "workspace:*",
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-router": "^1.132.0",
     "@xterm/addon-fit": "^0.10.0",
@@ -60,6 +65,6 @@
     "tsx": "^4.19.3"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "node-pty"]
   }
 }

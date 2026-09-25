@@ -1,6 +1,7 @@
 import {
   AssignWorkspaceToNamespaceInputSchema,
   CreateNamespaceInputSchema,
+  ReorderNamespacesInputSchema,
   UpdateNamespaceInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
@@ -69,6 +70,20 @@ export function registerNamespaceRoutes(deps: NamespaceRoutesDeps) {
       if (!namespace) return res.status(404).json({ error: "namespace_not_found" });
       emit("namespace.updated", { namespaceId });
       res.status(202).json({ namespace });
+    }),
+  );
+
+  app.post(
+    "/api/namespaces/reorder",
+    asyncRoute(async (req, res) => {
+      const input = ReorderNamespacesInputSchema.parse(req.body);
+      const result = operations.reorderNamespaces(input);
+      if (!result.reordered) {
+        const status = result.reason === "namespace_not_found" ? 404 : 409;
+        return res.status(status).json(result);
+      }
+      emit("namespace.updated", { namespaceIds: input.namespaceIds });
+      res.json(result);
     }),
   );
 

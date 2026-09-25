@@ -67,7 +67,7 @@ export function registerScheduledAgentRoutes(input: {
   const scheduledAgents = new ScheduledAgentRunner({
     store,
     operations,
-    getRuntime: (runtimeId) => config.runtimes.find((runtime) => runtime.id === runtimeId),
+    getRuntime: (runtimeId) => config.agentRuntimes.find((runtime) => runtime.id === runtimeId),
     dataDir: config.dataDir,
     createBackgroundSession: (input) =>
       createBackgroundAgentSession(

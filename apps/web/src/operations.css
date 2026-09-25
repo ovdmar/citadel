@@ -13,6 +13,11 @@
   border-color: var(--color-danger);
 }
 
+.operation-row.highlighted {
+  outline: 2px solid var(--color-accent, #3b82f6);
+  outline-offset: 2px;
+}
+
 .operation-row summary {
   display: flex;
   gap: 10px;

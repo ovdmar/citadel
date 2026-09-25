@@ -14,15 +14,18 @@ import {
 } from "./review-system.js";
 
 const dirs: string[] = [];
+const stores: SqliteStore[] = [];
 
 afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function makeStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-review-ops-"));
   dirs.push(dir);
-  const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
   store.migrate();
   return { dir, store };
 }

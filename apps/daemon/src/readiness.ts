@@ -3,7 +3,12 @@ import { sessionNeedsAttention } from "@citadel/core";
 
 export function deriveReadiness(input: {
   workspace: { lifecycle: string; dirty: boolean };
-  sessions: Array<{ status: string; runtimeId?: string; statusReason?: string | null | undefined }>;
+  sessions: Array<{
+    kind?: "agent" | "terminal";
+    status: string;
+    runtimeId?: string | null;
+    statusReason?: string | null | undefined;
+  }>;
   operations: Array<{ status: string; type: string; error: string | null }>;
   providerHealth: Array<{ status: string; reason: string | null }>;
   git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
@@ -39,7 +44,7 @@ export function deriveReadiness(input: {
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
+    (session) => session.kind !== "terminal" && ["starting", "running"].includes(session.status),
   );
   // Loose-typed (this signature accepts plain strings); cast to the canonical
   // shape for the shared predicate. Any non-canonical status will return false.
@@ -49,7 +54,7 @@ export function deriveReadiness(input: {
   const prConflicting = input.versionControl.pullRequest?.mergeable === "conflicting";
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
-    failedSession ? "A terminal or agent session needs attention" : null,
+    failedSession ? "A session needs attention" : null,
     failedOperation ? failedOperation.error || `${failedOperation.type} failed` : null,
     input.git.conflicted ? `${input.git.conflicted} conflicted files` : null,
     prConflicting ? "PR branch has merge conflicts with the base branch" : null,

@@ -6,13 +6,13 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("diagnostics client events", () => {
   it("records top-level browser lifecycle events", async () => {
     const fixture = createFixtureBase(dirs);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/diagnostics/client-event`, {
@@ -24,6 +24,7 @@ describe("diagnostics client events", () => {
           path: "/",
           href: "http://127.0.0.1/",
           visibility: "hidden",
+          focused: false,
           navigationType: "reload",
           ageMs: 123,
           persisted: false,
@@ -44,6 +45,7 @@ describe("diagnostics client events", () => {
           data: expect.objectContaining({
             pageId: "page_1",
             navigationType: "reload",
+            focused: false,
             persisted: false,
             swController: true,
           }),

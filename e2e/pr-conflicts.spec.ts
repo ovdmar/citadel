@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { apiPost } from "./helpers/api-request.js";
 
 // Route-level smoke for the merge-conflicts loop. The full UI affordance
 // (`tone-conflicting` workspace card + Fix-conflicts button) requires a PR
@@ -17,7 +18,7 @@ test("POST /api/workspaces/:id/fix-conflicts is registered (404 for unknown work
   // request fixture across mobile/tablet projects in parallel can ECONNRESET
   // the single shared daemon (observed in CI on the mobile project).
   test.skip(testInfo.project.name !== "desktop", "desktop run is sufficient for an API smoke");
-  const response = await request.post(`${API_BASE}/api/workspaces/ws_does_not_exist/fix-conflicts`, {
+  const response = await apiPost(request, `${API_BASE}/api/workspaces/ws_does_not_exist/fix-conflicts`, {
     data: {},
   });
   expect(response.status()).toBe(404);

@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { CiProviderSummary, Workspace } from "@citadel/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { automatedGhEnabled, cachedCiOrDisabled, shouldFetchGithubCi } from "./gh-automation.js";
+import { automatedGhEnabled, cachedCiOrDisabled, cachedCiOrSkipped, shouldFetchGithubCi } from "./gh-automation.js";
 
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function makeGitRepo(): { repoPath: string; headSha: string } {
@@ -65,6 +65,34 @@ describe("automatedGhEnabled", () => {
 });
 
 describe("shouldFetchGithubCi", () => {
+  it("waits for PR metadata before polling CI", () => {
+    const git = makeGitRepo();
+    const workspace = makeWorkspace(git.repoPath);
+    const store = {
+      getWorkspacePrSnapshot: () => null,
+    };
+
+    expect(shouldFetchGithubCi(store, workspace)).toBe(false);
+  });
+
+  it("does not poll CI when the current head is known to have no PR", () => {
+    const git = makeGitRepo();
+    const workspace = makeWorkspace(git.repoPath);
+    const store = {
+      getWorkspacePrSnapshot: () => ({
+        prNumber: null,
+        prState: null,
+        lastFetchAt: "2026-05-27T00:00:00.000Z",
+        lastHeadSha: git.headSha,
+        lastHeadShaChangedAt: "2026-05-27T00:00:00.000Z",
+        lastChecksGreenAt: null,
+        lastMergeStateStatus: null,
+      }),
+    };
+
+    expect(shouldFetchGithubCi(store, workspace)).toBe(false);
+  });
+
   it("stops CI polling for green PRs until local HEAD changes", () => {
     const git = makeGitRepo();
     const workspace = makeWorkspace(git.repoPath);
@@ -116,5 +144,14 @@ describe("cachedCiOrDisabled", () => {
     ]);
 
     expect(cachedCiOrDisabled(cache, "ci:owner/repo:abc123", "disabled")).toBe(ci);
+  });
+});
+
+describe("cachedCiOrSkipped", () => {
+  it("returns a non-degrading empty summary when CI is intentionally skipped", () => {
+    const ci = cachedCiOrSkipped(new Map(), "ci:owner/repo:abc123", "GitHub CI is cached");
+    expect(ci.status).toBe("healthy");
+    expect(ci.reason).toContain("cached");
+    expect(ci.runs).toEqual([]);
   });
 });

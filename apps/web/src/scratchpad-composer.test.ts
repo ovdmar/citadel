@@ -1,0 +1,142 @@
+// @vitest-environment happy-dom
+import { type ComponentProps, createElement, createRef } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ScratchpadComposer } from "./scratchpad-composer.js";
+
+const roots: Root[] = [];
+
+beforeEach(() => {
+  document.body.innerHTML = "";
+});
+
+afterEach(async () => {
+  await flushReact(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
+  vi.restoreAllMocks();
+});
+
+describe("ScratchpadComposer", () => {
+  it("submits the current draft on Cmd/Ctrl+Enter", async () => {
+    const onSubmit = vi.fn();
+    await renderComposer({ value: "ship it", onSubmit });
+
+    screenComposer().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith("ship it");
+  });
+
+  it("submits non-empty drafts on blur but ignores whitespace-only drafts", async () => {
+    const onSubmit = vi.fn();
+    await renderComposer({ value: "new thought", onSubmit });
+
+    screenComposer().dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(onSubmit).toHaveBeenCalledWith("new thought");
+
+    onSubmit.mockClear();
+    await renderComposer({ value: "   ", onSubmit });
+    screenComposer().dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("autosizes on input without exceeding 200px", async () => {
+    await renderComposer({ value: "line" });
+    const input = screenComposer();
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 260 });
+
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(input.style.height).toBe("200px");
+  });
+
+  it("does not blur-submit an existing draft when a composer action is clicked", async () => {
+    const onSubmit = vi.fn();
+    const onAction = vi.fn();
+    await renderComposer({
+      value: "existing draft",
+      onSubmit,
+      actions: createElement("button", { type: "button", onClick: onAction }, "Action"),
+    });
+
+    const input = screenComposer();
+    const button = document.querySelector("button");
+    if (!(button instanceof HTMLButtonElement)) throw new Error("action button missing");
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    button.dispatchEvent(mouseDown);
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: button }));
+    button.click();
+
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onAction).toHaveBeenCalled();
+  });
+
+  it("does not blur-submit an existing draft when voice overlay controls are clicked", async () => {
+    const onSubmit = vi.fn();
+    await renderComposer({ value: "existing draft", onSubmit });
+    const input = screenComposer();
+    const overlay = document.createElement("output");
+    overlay.dataset.voiceModeOverlay = "true";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    overlay.appendChild(toggle);
+    document.body.appendChild(overlay);
+
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: toggle }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("forwards the textarea ref and renders error/disabled state", async () => {
+    const ref = createRef<HTMLTextAreaElement>();
+    await renderComposer({ value: "", error: "save_failed", loaded: false, inputRef: ref });
+
+    expect(ref.current).toBe(screenComposer());
+    expect(screenComposer().disabled).toBe(true);
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("save_failed");
+  });
+});
+
+async function renderComposer(props: Partial<ComponentProps<typeof ScratchpadComposer>> = {}): Promise<void> {
+  const rootElement = document.createElement("div");
+  document.body.replaceChildren(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  await flushReact(() => {
+    root.render(
+      createElement(ScratchpadComposer, {
+        value: "",
+        loaded: true,
+        error: null,
+        inputRef: { current: null },
+        onChange: vi.fn(),
+        onSubmit: vi.fn(),
+        ...props,
+      }),
+    );
+  });
+}
+
+function screenComposer(): HTMLTextAreaElement {
+  const input = document.querySelector<HTMLTextAreaElement>(".scratchpad-composer-input");
+  if (!input) throw new Error("composer input missing");
+  return input;
+}
+
+async function settle() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+const flushReact = async (callback: () => void | Promise<void>) => {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+};

@@ -61,7 +61,7 @@ export type GhSchedulerDeps = {
 };
 
 export type GhScheduler = {
-  shouldRefetch(key: SchedulerKey, opts?: { force?: boolean }): ShouldRefetchResult;
+  shouldRefetch(key: SchedulerKey, opts?: { force?: boolean | undefined }): ShouldRefetchResult;
   recordFetch(key: SchedulerKey, summary: PullRequestSummary, workspaceId: string): void;
   recordFetchError(key: SchedulerKey, error: unknown): void;
   markRepoMainMoved(repoFullName: string): void;
@@ -78,7 +78,7 @@ const CADENCE_PENDING_MS = 60_000;
 const CADENCE_STABLE_REVIEW_MS = 10 * 60_000;
 // Viewer grace: 2 minutes between last viewer detach and the daemon entering
 // no-viewers skip mode. Brief tab reloads don't trip it.
-const VIEWER_GRACE_MS = 2 * 60_000;
+export const GH_VIEWER_GRACE_MS = 2 * 60_000;
 // Exponential backoff for non-rate-limit errors (auth wobble, network blip,
 // gh subprocess crash). 60s * 2^n capped at 5min so we don't burn quota on a
 // broken-auth loop while the cooldown gate (above) handles the rate-limit
@@ -122,12 +122,12 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
     return atMs + CADENCE_DEFAULT_MS;
   }
 
-  function shouldRefetch(key: SchedulerKey, opts: { force?: boolean } = {}): ShouldRefetchResult {
+  function shouldRefetch(key: SchedulerKey, opts: { force?: boolean | undefined } = {}): ShouldRefetchResult {
     // Precedence: cooldown > no-viewers > merged > backoff > not-due > force.
     // The order is documented in the plan; cooldown wins because it's the
     // most actionable signal for the operator.
     if (deps.getGhCooldown()) return { fetch: false, reason: "cooldown" };
-    if (!deps.hasViewers() && deps.msSinceLastViewer() > VIEWER_GRACE_MS) {
+    if (!deps.hasViewers() && deps.msSinceLastViewer() > GH_VIEWER_GRACE_MS) {
       return { fetch: false, reason: "no-viewers" };
     }
     const entry = entries.get(key);

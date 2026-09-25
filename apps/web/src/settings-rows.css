@@ -269,3 +269,21 @@
   align-items: center;
   gap: 6px;
 }
+
+.repo-main-workspace-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--c-fg-2);
+}
+
+.repo-main-workspace-toggle input {
+  margin: 0;
+}
+
+.repo-main-workspace-toggle span {
+  min-width: 0;
+}

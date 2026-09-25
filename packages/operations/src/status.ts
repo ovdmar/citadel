@@ -9,6 +9,7 @@ export type {
   MonitorTickDeps,
   MonitorTickOptions,
   MonitorTickResult,
+  PaneCaptureOptions,
   StatusMonitorHandle,
 } from "./status-monitor.js";
 export { runAutoRecoveryTick, startAutoRecoveryMonitor } from "./auto-recovery-monitor.js";

@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
+import { killTmuxSession } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService, WorkspaceInUseError } from "./index.js";
 
@@ -11,13 +13,9 @@ const tmuxSessions: string[] = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function shellService() {
@@ -33,13 +31,32 @@ function shellService() {
 }
 
 describe("launchAgent", () => {
+  describe("input validation", () => {
+    it("requires exactly one of repoId or repoName", () => {
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello" })).toThrow(/repoId or repoName/);
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello", repoId: "repo_test", repoName: "fixture" })).toThrow(
+        /repoId or repoName/,
+      );
+    });
+
+    it("requires a non-empty prompt", () => {
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test" })).toThrow();
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test", prompt: "" })).toThrow();
+    });
+
+    it("defaults runtimeId to claude-code", () => {
+      const parsed = LaunchAgentInputSchema.parse({ repoName: "fixture", prompt: "do a thing" });
+      expect(parsed.runtimeId).toBe("claude-code");
+    });
+  });
+
   it("auto-derives a fresh branch when caller omits branchName", async () => {
     const { fixture, store, service } = shellService();
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
 
     const result = await service.launchAgent(
-      { repoId: repo.id, prompt: "do a thing", runtimeId: "shell", workspaceName: "auto-branch" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { repoId: repo.id, prompt: "do a thing", runtimeId: "test-agent", workspaceName: "auto-branch" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((s) => s.id === result.sessionId);
     if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
@@ -48,6 +65,23 @@ describe("launchAgent", () => {
     // Auto-derived branch lives in the agent/ namespace, not on repo defaultBranch.
     expect(result.branchName).toMatch(/^agent\/auto-branch-[a-z0-9]{6}$/);
     expect(result.branchName).not.toBe(repo.defaultBranch);
+    expect(store.listWorkspaces().find((workspace) => workspace.id === result.workspaceId)).toMatchObject({
+      repoId: null,
+      kind: "root",
+      mode: "structured",
+      branch: "home",
+    });
+    expect(store.listWorkspaceCheckouts(result.workspaceId)).toMatchObject([
+      {
+        repoId: repo.id,
+        branch: result.branchName,
+        path: result.workspacePath,
+      },
+    ]);
+    expect(session).toMatchObject({
+      targetType: "worktree_checkout",
+      checkoutId: store.listWorkspaceCheckouts(result.workspaceId)[0]?.id,
+    });
   });
 
   it("auto-derives a fresh branch when caller passes the repo's default branch", async () => {
@@ -58,11 +92,11 @@ describe("launchAgent", () => {
       {
         repoId: repo.id,
         prompt: "describe",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceName: "default-branch-coll",
         branchName: repo.defaultBranch,
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((s) => s.id === result.sessionId);
     if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
@@ -79,11 +113,11 @@ describe("launchAgent", () => {
       {
         repoId: repo.id,
         prompt: "ship a thing",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceName: "explicit-new",
         branchName: "fb-fresh-branch",
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((s) => s.id === result.sessionId);
     if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
@@ -95,10 +129,10 @@ describe("launchAgent", () => {
   it("is idempotent on (repoId, workspaceName) — second call returns resumed=true with the existing session", async () => {
     const { fixture, store, service } = shellService();
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
-    const runtime = { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" };
+    const runtime = { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" };
 
     const first = await service.launchAgent(
-      { repoId: repo.id, prompt: "first", runtimeId: "shell", workspaceName: "idem" },
+      { repoId: repo.id, prompt: "first", runtimeId: "test-agent", workspaceName: "idem" },
       runtime,
     );
     const firstSession = store.listSessions().find((s) => s.id === first.sessionId);
@@ -107,7 +141,7 @@ describe("launchAgent", () => {
     expect(first.resumed).toBeUndefined();
 
     const second = await service.launchAgent(
-      { repoId: repo.id, prompt: "second", runtimeId: "shell", workspaceName: "idem" },
+      { repoId: repo.id, prompt: "second", runtimeId: "test-agent", workspaceName: "idem" },
       runtime,
     );
 
@@ -120,9 +154,9 @@ describe("launchAgent", () => {
   it("throws WorkspaceInUseError when an existing workspace is not ready", async () => {
     const { fixture, store, service } = shellService();
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
-    const runtime = { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" };
+    const runtime = { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" };
     const created = await service.launchAgent(
-      { repoId: repo.id, prompt: "init", runtimeId: "shell", workspaceName: "stuck" },
+      { repoId: repo.id, prompt: "init", runtimeId: "test-agent", workspaceName: "stuck" },
       runtime,
     );
     const session = store.listSessions().find((s) => s.id === created.sessionId);
@@ -130,7 +164,10 @@ describe("launchAgent", () => {
     store.updateWorkspaceLifecycle(created.workspaceId, "failed");
 
     await expect(
-      service.launchAgent({ repoId: repo.id, prompt: "retry", runtimeId: "shell", workspaceName: "stuck" }, runtime),
+      service.launchAgent(
+        { repoId: repo.id, prompt: "retry", runtimeId: "test-agent", workspaceName: "stuck" },
+        runtime,
+      ),
     ).rejects.toBeInstanceOf(WorkspaceInUseError);
   });
 });

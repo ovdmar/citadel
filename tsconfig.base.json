@@ -19,6 +19,7 @@
     "paths": {
       "@citadel/core": ["packages/core/src/index.ts"],
       "@citadel/contracts": ["packages/contracts/src/index.ts"],
+      "@citadel/contracts/*": ["packages/contracts/src/*.ts"],
       "@citadel/config": ["packages/config/src/index.ts"],
       "@citadel/db": ["packages/db/src/index.ts"],
       "@citadel/operations": ["packages/operations/src/index.ts"],

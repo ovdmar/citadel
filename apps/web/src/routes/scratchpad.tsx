@@ -25,14 +25,14 @@ export function ScratchpadView() {
 
   return (
     <div className="scratchpad-redirect" aria-busy="true">
-      Opening scratchpad…
+      Opening scratchpad...
     </div>
   );
 }
 
 function appendScratchpadParam(href: string): string {
   // href can already carry a query string and/or a hash; preserve both.
-  const [pathAndQuery, ...rest] = href.split("#", 1);
+  const [pathAndQuery] = href.split("#", 1);
   const hash = href.length > (pathAndQuery?.length ?? 0) ? href.slice((pathAndQuery?.length ?? 0) + 1) : "";
   const base = pathAndQuery ?? href;
   const joiner = base.includes("?") ? "&" : "?";

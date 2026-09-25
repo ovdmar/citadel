@@ -1,4 +1,4 @@
-// Lightweight structured event log for citadel's tmux/ttyd/lifecycle paths.
+// Lightweight structured event log for Citadel's tmux/terminal/lifecycle paths.
 //
 // Always on. Writes one JSON line per event to `<dataDir>/diagnostics.jsonl`
 // and keeps the last MAX_RING_EVENTS in memory so the cockpit can render a
@@ -18,12 +18,12 @@
 //   - daemon     : boot/shutdown lifecycle, environment, version
 //   - tmux       : has-session/list-sessions/list-panes calls (including
 //                  failures), kill, create
-//   - ttyd       : spawn/exit/adopt/release/reap, port reservation
+//   - terminal   : browser attach/reconnect/disconnect, PTY lifecycle
 //   - monitor    : status-monitor tick decisions (flips, deletions,
 //                  debounce state, missing-tick counter)
 //   - restore    : boot-restore reconcile flips, candidate count, results
 //   - reaper     : orphan-reaper actions (what was killed and why)
-//   - proxy      : terminal-routes ws upgrade, revive race, proxy errors
+//   - proxy      : terminal WebSocket upgrade, revive race, bridge errors
 //
 // Failure mode: if the underlying fs.appendFileSync throws (disk full,
 // EACCES, etc.) we log the failure once to console and silently drop
@@ -38,7 +38,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export type DiagnosticEvent = {
   ts: string; // ISO timestamp
-  category: string; // e.g. "tmux", "ttyd"
+  category: string; // e.g. "tmux", "terminal"
   event: string; // free-form short name e.g. "has-session.failed"
   data?: Record<string, unknown>;
 };

@@ -1,4 +1,4 @@
-// HTTP routes for Citadel Actions (configurable prompt presets).
+// HTTP routes for Citadel Actions (configurable prompt + runtime presets).
 // All writes go through the daemon-side mutex declared in `citadel-actions.ts`.
 import type { CitadelConfig } from "@citadel/config";
 import { CreateCitadelActionInputSchema, UpdateCitadelActionInputSchema } from "@citadel/contracts";

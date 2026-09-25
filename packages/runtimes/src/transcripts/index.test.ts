@@ -9,13 +9,13 @@ describe("transcript adapter dispatcher", () => {
   });
 
   it("returns null for unknown runtimes", () => {
-    expect(getTranscriptAdapter("shell")).toBeNull();
+    expect(getTranscriptAdapter("custom-debug")).toBeNull();
   });
 
   it("returns an empty array when no adapter is registered", () => {
     expect(
       getUserPromptsForSession({
-        runtimeId: "shell",
+        runtimeId: "custom-debug",
         workspacePath: "/tmp/x",
         sessionStartedAt: "2026-05-23T10:00:00.000Z",
       }),

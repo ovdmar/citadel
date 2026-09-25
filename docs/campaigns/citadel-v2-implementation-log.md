@@ -377,12 +377,7 @@
   - `provider_summary 12ms`
   - `web_cockpit_visible 408ms`
   - `workspace_settings_switch 285ms`
-- Reworked terminal WebSocket output transport:
-  - reconnect still sends a bounded tmux visible-screen snapshot,
-  - live output now streams from tmux control mode as incremental `outputChunk` messages instead of steady capture polling,
-  - input/paste/resize trigger one-shot catch-up snapshots to cover short commands during control-client attach races,
-  - the web terminal resets only for snapshots and appends streamed chunks,
-  - tests cover control-mode decoding, streamed WebSocket chunks, long output, reconnect scrollback, and cross-session isolation.
+- Reworked terminal WebSocket output transport. This entry described the earlier interpreted tmux renderer; that approach has since been superseded by the real-PTY bridge noted in the current limitations section below.
 - Reran `make check`: passed with 58 tests across 15 files. App/package source coverage is 92.39% statements.
 - Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
 - Reran `pnpm performance`:
@@ -443,7 +438,7 @@
 
 Known limitations after the local-first v2 baseline:
 
-- Terminal WebSocket now uses tmux control-mode streaming for live output, with bounded reconnect snapshots and interaction catch-up snapshots. Remaining terminal risk is deeper manual soak testing across full-screen TUIs and very high-volume output beyond the automated fidelity coverage.
+- Terminal WebSocket is being revised after operator feedback: the interpreted tmux renderer was efficient but not faithful enough for interactive TUIs. The current direction is xterm.js over WebSocket to node-pty `tmux attach-session`, with the external renderer fallback removed rather than kept as dead compatibility code.
 - Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
 - Workspace setup/teardown hook execution is implemented for static config hooks; lifecycle notification hooks cover workspace created/archived/removed and agent started; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown and notification failure policies; hook-provided links/actions now appear in the activity surface. Remaining hook work is deeper action execution semantics beyond URL/open controls.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.

@@ -16,7 +16,7 @@ import {
 // pickGitCwd uses real fs but doesn't pollute /tmp.
 const tempDirs: string[] = [];
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function makeTempGitDir(): string {

@@ -1,9 +1,9 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentSession, TerminalSession } from "@citadel/contracts";
 import type { RuntimeStatusAdapter } from "@citadel/runtimes";
 import { REASON_ELAPSED_TIMER } from "@citadel/runtimes";
 import { describe, expect, it, vi } from "vitest";
 import { reduceStatus } from "./agent-status.js";
-import { type MonitorTickDeps, runStatusMonitorTick } from "./status-monitor.js";
+import { type MonitorTickDeps, type PaneCaptureOptions, runStatusMonitorTick } from "./status-monitor.js";
 
 // Shell-first status monitor tests.
 //
@@ -31,11 +31,37 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
     endedAt: null,
     exitCode: null,
     transport: "disconnected",
+    terminalBackend: "tmux",
     tmuxSessionName: "citadel_test_1",
     tmuxSessionId: "$1",
     createdAt: "2026-05-26T18:59:00.000Z",
     updatedAt: "2026-05-26T18:59:00.000Z",
     ...over,
+    kind: "agent",
+  };
+}
+
+function makeTerminalSession(over: Partial<TerminalSession> = {}): TerminalSession {
+  return {
+    id: "term_1",
+    workspaceId: "ws_1",
+    runtimeId: null,
+    displayName: "Shell",
+    status: "running",
+    statusReason: "launched",
+    statusReasonAt: null,
+    lastStatusAt: "2026-05-26T18:59:00.000Z",
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "disconnected",
+    terminalBackend: "tmux",
+    tmuxSessionName: "citadel_term_1",
+    tmuxSessionId: "$2",
+    createdAt: "2026-05-26T18:59:00.000Z",
+    updatedAt: "2026-05-26T18:59:00.000Z",
+    ...over,
+    kind: "terminal",
   };
 }
 
@@ -49,6 +75,7 @@ function makeAdapter(observed: ReturnType<RuntimeStatusAdapter["observe"]>): Run
 
 interface DepsOver {
   sessions?: AgentSession[];
+  terminalSessions?: TerminalSession[];
   workspaces?: Array<{ id: string }>;
   // Shell-first: deps gives `panePidProcess` (foreground command, null when
   // tmux missing) instead of legacy sentinel reads. Map keys are tmux
@@ -61,7 +88,7 @@ interface DepsOver {
   runtimeBinaries?: Map<string, string>;
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
-  paneCapture?: string | ((name: string) => string);
+  paneCapture?: string | ((name: string, options?: PaneCaptureOptions) => string | Promise<string>);
   adapter?: RuntimeStatusAdapter;
   recoverRuntimeSessionId?: MonitorTickDeps["recoverRuntimeSessionId"];
   setRuntimeSessionId?: MonitorTickDeps["setRuntimeSessionId"];
@@ -94,12 +121,14 @@ function makeDeps(over: DepsOver = {}) {
   const deps: MonitorTickDeps = {
     now: () => FIXED_NOW,
     listSessions: () => sessions,
+    ...(over.terminalSessions ? { listTerminalSessions: () => over.terminalSessions ?? [] } : {}),
     listWorkspaceIds: () => new Set(workspaces.map((w) => w.id)),
     updateSession: (id, update) => updates.push({ id, update: update as unknown as Record<string, unknown> }),
     deleteSession: (id) => deleted.push(id),
     emit: (event, payload) => emitted.push({ event, payload }),
     tmuxActivities: () => over.tmuxActivities ?? new Map(),
-    paneCapture: (name) => (typeof over.paneCapture === "function" ? over.paneCapture(name) : (over.paneCapture ?? "")),
+    paneCapture: (name, options) =>
+      typeof over.paneCapture === "function" ? over.paneCapture(name, options) : (over.paneCapture ?? ""),
     // CRITICAL: must use `has()` not `??` — the Map may explicitly store
     // `null` for tmux-missing test cases, and `??` would treat that as
     // "no override" and fall back to the agent-foreground default.
@@ -268,14 +297,14 @@ describe("shell-first per-runtime status derivation", () => {
     expect(updates).toHaveLength(0);
   });
 
-  it("shell-runtime session with shell foreground stays running (NOT idle — for plain terminals the shell IS the runtime)", async () => {
+  it("shell-like custom agent runtime with shell foreground stays running", async () => {
     const { deps, updates } = makeDeps({
-      sessions: [makeSession({ id: "sess_term", runtimeId: "shell" })],
+      sessions: [makeSession({ id: "sess_term", runtimeId: "test-agent" })],
       panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
-      runtimeBinaries: new Map([["shell", "bash"]]),
+      runtimeBinaries: new Map([["test-agent", "bash"]]),
     });
     await runStatusMonitorTick(deps, { source: "tick" });
-    // Shell-runtime sessions should not flip to idle when foreground is bash.
+    // A shell-like custom agent runtime should not flip to idle when foreground is bash.
     expect(updates).toHaveLength(0);
   });
 
@@ -330,6 +359,99 @@ describe("shell-first per-runtime status derivation", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0]?.update).toMatchObject({ status: "running", reason: REASON_ELAPSED_TIMER });
     expect(updates[0]?.update.status).not.toBe("idle");
+  });
+
+  it("awaits async pane capture before runtime adapter observation", async () => {
+    const adapter: RuntimeStatusAdapter = {
+      runtimeId: "claude-code",
+      createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
+      observe: vi.fn((_state, ctx) => (ctx.paneCapture.includes("async-ready") ? "waiting_for_input" : null)),
+    };
+    const { deps, updates } = makeDeps({
+      paneCapture: async () => "async-ready",
+      adapter,
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(adapter.observe).toHaveBeenCalled();
+    expect(updates[0]?.update).toMatchObject({ status: "waiting_for_input" });
+  });
+});
+
+describe("terminal shell foreground status derivation", () => {
+  it("marks a terminal idle when the pane foreground is the shell", async () => {
+    const { deps, updates, emitted } = makeDeps({
+      sessions: [],
+      terminalSessions: [makeTerminalSession({ status: "running", statusReason: "foreground_command" })],
+      panePidProcess: new Map([["citadel_term_1", { command: "bash", pid: 200 }]]),
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(updates).toEqual([
+      {
+        id: "term_1",
+        update: expect.objectContaining({
+          status: "idle",
+          reason: "shell_foreground",
+          lastStatusAt: FIXED_NOW,
+        }),
+      },
+    ]);
+    expect(emitted).toEqual([{ event: "terminal.updated", payload: { workspaceId: "ws_1", sessionId: "term_1" } }]);
+  });
+
+  it("marks a terminal running only while a non-shell command is foreground", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [],
+      terminalSessions: [makeTerminalSession({ status: "idle", statusReason: "shell_foreground" })],
+      panePidProcess: new Map([["citadel_term_1", { command: "node", pid: 201 }]]),
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(updates[0]?.update).toMatchObject({
+      status: "running",
+      reason: "foreground_command",
+      lastStatusAt: FIXED_NOW,
+    });
+  });
+});
+
+describe("pane capture freshness policy", () => {
+  it("asks for a very fresh Codex pane capture while the DB row is post-turn idle", async () => {
+    const captureOptions: PaneCaptureOptions[] = [];
+    const { deps } = makeDeps({
+      sessions: [makeSession({ runtimeId: "codex", status: "idle" })],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      paneCapture: (_name, options) => {
+        captureOptions.push(options ?? {});
+        return "idle pane";
+      },
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(captureOptions[0]?.maxAgeMs).toBe(1000);
+  });
+
+  it("bounds Codex running-state capture staleness without forcing every global pane capture", async () => {
+    const captureOptions: PaneCaptureOptions[] = [];
+    const { deps } = makeDeps({
+      sessions: [makeSession({ runtimeId: "codex", status: "running" })],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      paneCapture: (_name, options) => {
+        captureOptions.push(options ?? {});
+        return "running pane";
+      },
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(captureOptions[0]?.maxAgeMs).toBe(10_000);
   });
 });
 

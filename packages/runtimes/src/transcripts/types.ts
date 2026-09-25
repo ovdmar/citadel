@@ -37,4 +37,6 @@ export type GetUserPromptsInput = {
   sessionStartedAt: string;
   /** Override `os.homedir()` — set by tests. */
   home?: string;
+  /** Codex-specific override for CODEX_HOME. */
+  codexHome?: string;
 };

@@ -1,15 +1,46 @@
-import type { AgentSession, Namespace, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
-import type { GroupKey } from "./modals.js";
+import { repoNameWithOwner } from "./repo-labels.js";
 
 export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
-// Subset of GroupKey that actually participates in the bucket tree. "none" is
-// the navigator's flat-list mode and never reaches buildGroupTree.
-export type GroupableKey = Exclude<GroupKey, "none">;
+export type GroupKey = "workspace" | "repo" | "status" | "namespace";
+export type NavigatorGrouping = GroupKey[];
 
-export type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
+// Subset of GroupKey that actually participates in the bucket tree. "workspace"
+// is rendered as the workspace-root list and never reaches buildGroupTree.
+export type GroupableKey = Exclude<GroupKey, "workspace">;
+
+export function normalizeNavigatorGrouping(value: unknown): NavigatorGrouping {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const out: NavigatorGrouping = [];
+  for (const key of raw) {
+    if (key !== "workspace" && key !== "repo" && key !== "status" && key !== "namespace") continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  if (!out.length) return ["workspace"];
+  if (out.includes("namespace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace" && key !== "namespace");
+  }
+  if (out.includes("workspace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace");
+  }
+  if (out.includes("namespace")) {
+    return [...out.filter((key) => key !== "workspace"), "workspace"];
+  }
+  return out;
+}
+
+// Translate the user-facing grouping sequence into the level sequence
+// buildGroupTree consumes. "workspace" is the leaf/root workspace card mode,
+// so combining it with namespace means "namespace groups containing workspace
+// rows"; combining it with repo/status is normalized away above.
+export function treeGroupingFor(grouping: NavigatorGrouping | GroupKey | "none"): GroupableKey[] {
+  return normalizeNavigatorGrouping(grouping).filter((key): key is GroupableKey => key !== "workspace");
+}
+
+export type WorkspaceEntry = { workspace: Workspace; sessions: WorkspaceSession[] };
 
 export type GroupNode =
   | { kind: "group"; id: string; path: string; label: string; count: number; children: GroupNode[] }
@@ -35,7 +66,7 @@ type EnrichedWorkspace = WorkspaceEntry & {
 const UNCATEGORIZED_KEY = "__uncategorized__";
 
 function rawBucketKey(entry: EnrichedWorkspace, field: GroupableKey): string {
-  if (field === "repo") return entry.repo?.name ?? "Unknown repo";
+  if (field === "repo") return entry.repo ? repoNameWithOwner(entry.repo) : "Unknown repo";
   if (field === "namespace") return entry.namespace ? entry.namespace.id : UNCATEGORIZED_KEY;
   return entry.section ?? "idle";
 }
@@ -56,12 +87,11 @@ function compareKeys(a: string, b: string, field: GroupableKey, namespaces: Name
     return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
   }
   if (field === "namespace") {
-    // Float Uncategorized to the bottom; sort named namespaces by display name.
     if (a === UNCATEGORIZED_KEY) return 1;
     if (b === UNCATEGORIZED_KEY) return -1;
-    const an = namespaces.find((entry) => entry.id === a)?.name ?? a;
-    const bn = namespaces.find((entry) => entry.id === b)?.name ?? b;
-    return an.localeCompare(bn);
+    const an = namespaces.find((entry) => entry.id === a);
+    const bn = namespaces.find((entry) => entry.id === b);
+    return (an?.position ?? 0) - (bn?.position ?? 0) || (an?.name ?? a).localeCompare(bn?.name ?? b);
   }
   return a.localeCompare(b);
 }
@@ -76,25 +106,33 @@ function compareKeys(a: string, b: string, field: GroupableKey, namespaces: Name
 export function buildGroupTree(
   workspaces: Workspace[],
   repos: Repo[],
-  sessions: AgentSession[],
+  sessions: WorkspaceSession[],
   operations: Operation[],
   grouping: GroupableKey[],
   namespaces: Namespace[] = [],
+  checkouts: WorktreeCheckout[] = [],
 ): GroupNode[] {
   if (!grouping.length) return [];
 
-  const enriched: EnrichedWorkspace[] = workspaces.map((workspace) => {
+  const groupByRepo = grouping.includes("repo");
+  const enriched: EnrichedWorkspace[] = workspaces.flatMap((workspace) => {
     const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const workspaceOps = operations.filter((operation) => operation.workspaceId === workspace.id);
     const attention = readinessForWorkspace(workspace, {
       sessions: workspaceSessions,
       operations: workspaceOps,
     });
-    const repo = repos.find((entry) => entry.id === workspace.repoId);
     const namespace = workspace.namespaceId
       ? (namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
       : null;
-    return { workspace, sessions: workspaceSessions, repo, namespace, section: attention.section };
+    const repoIds = groupByRepo ? repoIdsForWorkspace(workspace, checkouts) : [workspace.repoId];
+    return repoIds.map((repoId) => ({
+      workspace,
+      sessions: workspaceSessions,
+      repo: repos.find((entry) => entry.id === repoId),
+      namespace,
+      section: attention.section,
+    }));
   });
 
   const build = (entries: EnrichedWorkspace[], levels: GroupableKey[], parentPath: string): GroupNode[] => {
@@ -153,6 +191,15 @@ export function buildGroupTree(
   return build(enriched, grouping, "");
 }
 
+function repoIdsForWorkspace(workspace: Workspace, checkouts: WorktreeCheckout[]): Array<string | null> {
+  if (workspace.repoId) return [workspace.repoId];
+  const liveRepoIds = new Set<string>();
+  for (const checkout of checkouts) {
+    if (checkout.workspaceId === workspace.id && !checkout.archivedAt) liveRepoIds.add(checkout.repoId);
+  }
+  return liveRepoIds.size ? Array.from(liveRepoIds) : [];
+}
+
 export function collectGroupPaths(nodes: GroupNode[]): Set<string> {
   const paths = new Set<string>();
   const walk = (list: GroupNode[]) => {
@@ -163,4 +210,47 @@ export function collectGroupPaths(nodes: GroupNode[]): Set<string> {
   };
   walk(nodes);
   return paths;
+}
+
+// Depth-first flatten of the rendered tree to a list of workspace IDs in
+// in-tree visible order. Collapse state is intentionally ignored — this is
+// the index space cockpit-side nav shortcuts (Ctrl+1..9) map onto, and the
+// caller auto-expands the relevant group via expandGroupPath so the
+// selected workspace becomes visible.
+//
+// When the tree is empty (grouping = "none" — buildGroupTree returns []),
+// the cockpit falls back to walking `workspaces` in input order (see
+// the inline fallback at `apps/web/src/cockpit.tsx`'s flatWorkspaceIds memo).
+export function flattenWorkspaceOrder(nodes: GroupNode[]): string[] {
+  const out: string[] = [];
+  const walk = (list: GroupNode[]) => {
+    for (const node of list) {
+      if (node.kind === "leaf") {
+        for (const entry of node.workspaces) out.push(entry.workspace.id);
+      } else {
+        walk(node.children);
+      }
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+// Find the group node path that contains the given workspace, deepest match
+// first. Returns null when the workspace is not present in the tree (or the
+// tree is empty / grouping = "none", in which case no group expansion is
+// needed). Used by cockpit nav shortcuts to auto-expand the enclosing group.
+export function findGroupPathForWorkspace(nodes: GroupNode[], workspaceId: string): string | null {
+  const walk = (list: GroupNode[]): string | null => {
+    for (const node of list) {
+      if (node.kind === "leaf") {
+        if (node.workspaces.some((entry) => entry.workspace.id === workspaceId)) return node.path;
+      } else {
+        const inner = walk(node.children);
+        if (inner !== null) return inner;
+      }
+    }
+    return null;
+  };
+  return walk(nodes);
 }

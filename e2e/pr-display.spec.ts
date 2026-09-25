@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
+import { apiPost } from "./helpers/api-request.js";
 
 // PR display & management — focused E2E coverage.
 //
@@ -48,7 +49,7 @@ test("inspector PR section renders even when the workspace has no PR", async ({ 
 });
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await request.post(`${API_BASE}/api/repos`, {
+  const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, {
     data: {
       rootPath: fixture.repoPath,
       name: name ?? `E2E PR ${Date.now().toString(36)}`,
@@ -60,7 +61,7 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {
-  const workspaceResponse = await request.post(`${API_BASE}/api/workspaces`, {
+  const workspaceResponse = await apiPost(request, `${API_BASE}/api/workspaces`, {
     data: { repoId, name, source: "scratch" },
   });
   expect(workspaceResponse.ok()).toBe(true);
@@ -79,6 +80,7 @@ function createGitFixture() {
   run("git", ["add", "."], repoPath);
   run("git", ["commit", "-m", "initial"], repoPath);
   run("git", ["push", "origin", "HEAD:main"], repoPath);
+  run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
   return { dir, repoPath, remotePath };
 }
 

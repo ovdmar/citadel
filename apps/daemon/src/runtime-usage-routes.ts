@@ -2,6 +2,7 @@ import type { CitadelConfig } from "@citadel/config";
 import { collectRuntimeUsage } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
+import { resolveUsageRefreshInterval, usageCacheKey } from "./provider-cache.js";
 
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
@@ -29,10 +30,10 @@ export function registerRuntimeUsageRoutes(input: {
     asyncRoute(async (req, res) => {
       const runtimeId = req.params.runtimeId;
       if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
-      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
+      const runtime = config.agentRuntimes.find((candidate) => candidate.id === runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
 
-      const runtimeHealth = listRuntimeHealth(config.runtimes).find((entry) => entry.id === runtimeId);
+      const runtimeHealth = listRuntimeHealth(config.agentRuntimes).find((entry) => entry.id === runtimeId);
       const checkedAt = new Date().toISOString();
       // Health gate: a runtime that isn't healthy has no usage to fetch. We
       // short-circuit BEFORE spawning anything (tmux, PTY, external command).
@@ -66,8 +67,9 @@ export function registerRuntimeUsageRoutes(input: {
       }
 
       const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
-      const cacheKey = `usage:${runtimeId}:${provider?.id ?? "builtin"}`;
+      const cacheKey = usageCacheKey(runtimeId, provider?.id);
       if (options.force) providerCache.delete(cacheKey);
+      const ttlMs = resolveUsageRefreshInterval(provider, config);
       const usage = await cachedProvider(
         cacheKey,
         () =>
@@ -77,7 +79,7 @@ export function registerRuntimeUsageRoutes(input: {
             args: runtime.args,
             externalProvider: provider,
           }),
-        5 * 60_000,
+        ttlMs,
       );
       res.json({ usage });
     });

@@ -1,27 +1,31 @@
 import type {
-  AgentSession,
   Namespace,
   Operation,
   PullRequestSummary,
   Workspace,
   WorkspaceDirtySummary,
+  WorkspaceSession,
 } from "@citadel/contracts";
-import { sessionNeedsAttention } from "@citadel/core";
+import type { LifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import { Folder, GitBranch, Home, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
+import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
+import { type AttentionSessionIds, deriveWorkspaceDisplayLifecycleTone } from "./session-status-display.js";
 import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
   workspace: Workspace;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operation?: Operation | null;
   pullRequest?: PullRequestSummary | null;
-  approval?: ApprovalTone;
+  approval?: ApprovalTone | undefined;
   // When provided, skip the global state lookup and use these directly.
   // Callers rendering many cards should build the namespace Map once at the
   // parent so we avoid O(n*m) lookups across a large list.
@@ -32,30 +36,30 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged" | "conflicting";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
-
-// Aggregates the per-agent statuses for a workspace into one tone for the
-// status dot. Priority: attention > rate_limited > running > idle. Shell
-// sessions are excluded — they're plain terminals, not agents. usage_limited
-// (account-wide cap, waits for a known reset) collapses into the same blue
-// `rate_limited` tone since both mean "stalled, will recover".
-export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
-  const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
-  if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
-  if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
-  if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
-  return "idle";
+export function lifecycleToneClass(tone: LifecycleTone): string {
+  switch (tone) {
+    case "never-started":
+      return "cit-pulse-idle";
+    case "running":
+      return "cit-pulse-run";
+    case "done":
+      return "cit-pulse-idle";
+    case "attention":
+      return "cit-pulse-bad";
+  }
 }
 
-// Maps the aggregated tone to the shared `cit-pulse-*` class used across
-// the cockpit (bottom-bar "auto mode" pill, navigator "Running" stat,
-// inspector deploy/runtime pulses). Keeps workspace-card chrome visually
-// consistent with the rest of the app.
-function citPulseClass(tone: WorkspaceAgentTone): string {
-  if (tone === "attention") return "cit-pulse-bad";
-  if (tone === "rate_limited") return "cit-pulse-info";
-  if (tone === "running") return "cit-pulse-run";
-  return "cit-pulse-idle";
+function lifecycleToneAriaSuffix(tone: LifecycleTone): string {
+  switch (tone) {
+    case "attention":
+      return ", agent needs attention";
+    case "running":
+      return ", agent running";
+    case "done":
+      return ", agent done";
+    case "never-started":
+      return ", agent never started";
+  }
 }
 
 export type WorkspaceReorderProps = {
@@ -80,17 +84,37 @@ export function WorkspaceCard(
     // `draggable={true}`) doesn't have to change in this PR. Internally
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;
+    hideBranch?: boolean;
+    branchLabel?: string | null | undefined;
+    branchTitle?: string | undefined;
+    cardTitle?: string | undefined;
+    displayTitle?: string;
+    onRename?: (name: string) => Promise<unknown> | unknown;
+    renameLabel?: string;
+    rightControl?: ReactNode;
+    disableDrop?: boolean;
+    allowRootDrop?: boolean;
+    prToneOverride?: PrTone | undefined;
+    diffOverride?: { additions: number | null; deletions: number | null } | undefined;
+    lifecyclePullRequest?: PullRequestSummary | null | undefined;
+    unseenAttentionSessionIds?: AttentionSessionIds | undefined;
+    onDropFocus?: (() => void) | undefined;
   },
 ) {
   const { workspace, pullRequest } = props;
-  const titleDisplay = workspaceDisplayTitle(workspace);
-  const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
+  const titleDisplay = props.displayTitle ?? workspaceDisplayTitle(workspace);
+  const prTone = props.prToneOverride ?? (pullRequest ? prToneFor(pullRequest) : "missing");
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
-  const agentTone = deriveWorkspaceAgentTone(props.sessions);
-  const agentToneSuffix =
-    agentTone === "attention" ? ", agent needs attention" : agentTone === "running" ? ", agent running" : "";
-  const additions = pullRequest?.additions ?? null;
-  const deletions = pullRequest?.deletions ?? null;
+  const lifecycleTone = deriveWorkspaceDisplayLifecycleTone({
+    sessions: props.sessions,
+    pullRequest: props.lifecyclePullRequest === undefined ? (pullRequest ?? null) : props.lifecyclePullRequest,
+    unseenAttentionSessionIds: props.unseenAttentionSessionIds,
+  });
+  const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
+  const branchLabel = props.branchLabel === undefined ? workspace.branch : props.branchLabel;
+  const branchTitle = props.branchTitle ?? branchLabel;
+  const additions = props.diffOverride ? props.diffOverride.additions : (pullRequest?.additions ?? null);
+  const deletions = props.diffOverride ? props.diffOverride.deletions : (pullRequest?.deletions ?? null);
   const hasDiff = additions !== null || deletions !== null;
   const lifecycleText =
     workspace.lifecycle === "creating"
@@ -126,11 +150,13 @@ export function WorkspaceCard(
   }, [editing]);
 
   const rename = useMutation({
-    mutationFn: (name: string) =>
-      api(`/api/workspaces/${workspace.id}`, {
+    mutationFn: (name: string) => {
+      if (props.onRename) return Promise.resolve(props.onRename(name));
+      return api(`/api/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({ name }),
-      }),
+      });
+    },
     onSuccess: () => {
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["state"] });
@@ -211,6 +237,7 @@ export function WorkspaceCard(
 
   const wrapClassName = [
     "workspace-card-wrap",
+    props.rightControl ? "has-right-control" : null,
     reorderIndicator === "above" ? "is-drop-above" : null,
     reorderIndicator === "below" ? "is-drop-below" : null,
   ]
@@ -222,6 +249,12 @@ export function WorkspaceCard(
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
+        // The .active state paints the card with a dark navy background
+        // regardless of cockpit theme. Mark it as on-dark so descendants
+        // (e.g. .workspace-card-issue chip whose color tracks --color-action,
+        // which is also dark navy on light cockpit) can flip to a light-fg
+        // variant via [data-cit-on-dark="true"] selectors.
+        data-cit-on-dark={props.active ? "true" : undefined}
         {...dragHandlers}
         onClick={() => {
           if (!editing) props.onSelect();
@@ -231,6 +264,7 @@ export function WorkspaceCard(
           setShowNamespaceMenu(true);
         }}
         aria-label={`Open workspace ${workspace.name}${agentToneSuffix}`}
+        title={props.cardTitle}
       >
         <span
           className={`workspace-card-agent tone-${prTone} ${workspace.kind === "root" ? "root" : ""}`}
@@ -250,7 +284,7 @@ export function WorkspaceCard(
                 <strong> has overflow: hidden for title-truncation, which
                 would clip the cit-pulse-run ripple animation's left edge. */}
             <span
-              className={`cit-pulse cit-pulse-sm ${citPulseClass(agentTone)} workspace-status-dot`}
+              className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(lifecycleTone)} workspace-status-dot`}
               aria-hidden="true"
             />
             {editing ? (
@@ -270,7 +304,7 @@ export function WorkspaceCard(
                     setEditing(false);
                   }
                 }}
-                aria-label="Rename workspace"
+                aria-label={props.renameLabel ?? "Rename workspace"}
               />
             ) : (
               <strong
@@ -285,9 +319,11 @@ export function WorkspaceCard(
               </strong>
             )}
           </span>
-          <span className="workspace-card-branch" title={workspace.branch}>
-            {workspace.branch}
-          </span>
+          {!props.hideBranch && branchLabel ? (
+            <span className="workspace-card-branch" title={branchTitle ?? undefined}>
+              {branchLabel}
+            </span>
+          ) : null}
           {lifecycleText ? (
             <span className={`workspace-card-lifecycle ${workspace.lifecycle}`} title={lifecycleText}>
               {lifecycleText}
@@ -299,7 +335,11 @@ export function WorkspaceCard(
             <span
               className="namespace-pill"
               title={`Namespace: ${namespace.name}`}
-              style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
+              style={
+                namespace.color
+                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
+                  : undefined
+              }
             >
               <Folder size={10} /> {namespace.name}
             </span>
@@ -310,20 +350,22 @@ export function WorkspaceCard(
               <span className="diff-del">-{deletions ?? 0}</span>
             </span>
           ) : null}
-          <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
-            {approvalTone === "approved" ? (
-              <ShieldCheck size={13} />
-            ) : approvalTone === "changes" ? (
-              <ShieldAlert size={13} />
-            ) : approvalTone === "pending" ? (
-              <MessageSquare size={13} />
-            ) : (
-              <ShieldQuestion size={13} />
-            )}
-          </span>
+          {props.rightControl ? <span className="workspace-card-right-control-spacer" /> : null}
+          {approvalTone === "pending" ? null : (
+            <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
+              {approvalTone === "approved" ? (
+                <ShieldCheck size={13} />
+              ) : approvalTone === "changes" ? (
+                <ShieldAlert size={13} />
+              ) : (
+                <ShieldQuestion size={13} />
+              )}
+            </span>
+          )}
         </span>
       </button>
-      {workspace.kind === "root" ? null : (
+      {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
+      {(workspace.kind === "root" && !props.allowRootDrop) || props.disableDrop ? null : (
         <button
           type="button"
           className="workspace-card-drop"
@@ -334,7 +376,13 @@ export function WorkspaceCard(
           <X size={11} />
         </button>
       )}
-      {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
+      {confirmDrop ? (
+        <DropWorkspaceDialog
+          workspace={workspace}
+          onDropFocus={props.onDropFocus}
+          onClose={() => setConfirmDrop(false)}
+        />
+      ) : null}
       {showNamespaceMenu ? (
         <NamespacePickerDialog
           workspace={workspace}
@@ -347,6 +395,7 @@ export function WorkspaceCard(
 }
 
 function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  useOverlayPresent();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -494,12 +543,17 @@ type DropResult = {
 type DropCheckResult = {
   removable: boolean;
   dirty: boolean;
-  reason: "ok" | "root_workspace" | "dirty";
+  reason: "ok" | "root_workspace" | "non_empty_workspace" | "dirty";
   dirtySummary?: WorkspaceDirtySummary | null;
   error?: string | null;
 };
 
-function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+function DropWorkspaceDialog(props: {
+  workspace: Workspace;
+  onDropFocus?: (() => void) | undefined;
+  onClose: () => void;
+}) {
+  useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
   const workspaceId = props.workspace.id;
@@ -514,7 +568,10 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
       return {
         removable: Boolean(body.removable),
         dirty: Boolean(body.dirty),
-        reason: body.reason === "root_workspace" || body.reason === "dirty" ? body.reason : "ok",
+        reason:
+          body.reason === "root_workspace" || body.reason === "non_empty_workspace" || body.reason === "dirty"
+            ? body.reason
+            : "ok",
         dirtySummary: body.dirtySummary ?? null,
         error: body.error ?? null,
       };
@@ -547,6 +604,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
     // active-workspace selector and the navigator) subtracts blacklisted
     // ids on read, so the workspace disappears for every consumer.
     onMutate: () => {
+      props.onDropFocus?.();
       optimistic.add(workspaceId);
       const previous = queryClient.getQueryData<StateResponse>(["state"]);
       if (previous) {
@@ -592,6 +650,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
   const dirtyBlocked =
     Boolean(preflight && !preflight.removable && preflight.dirty) || Boolean(result && !result.removed && result.dirty);
   const rootBlocked = Boolean(preflight && !preflight.removable && preflight.reason === "root_workspace");
+  const nonEmptyBlocked = Boolean(preflight && !preflight.removable && preflight.reason === "non_empty_workspace");
   const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
   const dirtySummary = result?.dirtySummary ?? preflight?.dirtySummary ?? null;
   const hasStructuredSummary =
@@ -606,10 +665,14 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
         onMouseDown={(event) => event.stopPropagation()}
       >
         <strong>Drop "{props.workspace.name}"?</strong>
-        <p>
-          This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the worktree
-          has uncommitted changes or unpushed commits.
-        </p>
+        {props.workspace.kind === "root" && props.workspace.mode === "structured" ? (
+          <p>This removes the structured workspace Home directory. Remove any worktrees under it first.</p>
+        ) : (
+          <p>
+            This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the
+            worktree has uncommitted changes or unpushed commits.
+          </p>
+        )}
         {check.isLoading ? <p className="empty compact">Checking workspace status…</p> : null}
         {check.error instanceof Error ? <p className="drop-workspace-error">{check.error.message}</p> : null}
         {dirtyBlocked ? (
@@ -618,6 +681,9 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
           </p>
         ) : null}
         {rootBlocked ? <p className="drop-workspace-error">The root workspace is not removable.</p> : null}
+        {nonEmptyBlocked ? (
+          <p className="drop-workspace-error">Remove this workspace's worktrees before dropping the Home.</p>
+        ) : null}
         {hasStructuredSummary && dirtySummary ? (
           <fieldset className="drop-workspace-summary" aria-label="Blocking changes">
             {dirtySummary.files.length > 0 ? (

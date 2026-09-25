@@ -32,14 +32,9 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  // Never intercept API, SSE, or terminal proxy traffic — Citadel needs live
+  // Never intercept API, SSE, or terminal WebSocket traffic — Citadel needs live
   // state and an open WebSocket upgrade path through the daemon.
-  if (
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/events") ||
-    url.pathname.startsWith("/terminals") ||
-    url.pathname.startsWith("/terminal/")
-  ) {
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/events") || url.pathname.startsWith("/terminal/")) {
     return;
   }
   // Only handle same-origin GETs.

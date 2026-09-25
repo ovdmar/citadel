@@ -1,6 +1,13 @@
 import type { McpToolDefinition } from "./index.js";
 
-export const reviewMcpToolDefinitions: McpToolDefinition[] = [
+export type ReviewMcpToolName =
+  | "list_review_comments"
+  | "add_review_comment"
+  | "update_review_comment"
+  | "delete_review_comment"
+  | "request_review";
+
+export const reviewMcpToolDefinitions: Array<McpToolDefinition & { name: ReviewMcpToolName }> = [
   {
     name: "list_review_comments",
     description:

@@ -2,39 +2,36 @@ import type { ScheduledAgent } from "@citadel/contracts";
 import type { SqliteStore } from "./index.js";
 import { scheduledAgentFromRow } from "./rows.js";
 
-// Sentinel cron written for one-shot rows. Must never match a real minute:
-// dom=31 + mon=2 with dow wild yields cronMatches() === false for every date
-// (Feb has no 31st). Earlier "0 0 31 2 0" was unsafe because dom/dow
-// non-wild use OR semantics and would fire every Sunday in February.
 const ONE_SHOT_CRON_PLACEHOLDER = "0 0 31 2 *";
-
-type ScheduledAgentPatch = Partial<
-  Pick<
-    ScheduledAgent,
-    | "name"
-    | "description"
-    | "scheduleType"
-    | "cron"
-    | "runAt"
-    | "repoId"
-    | "runtimeId"
-    | "prompt"
-    | "workspaceStrategy"
-    | "workspaceName"
-    | "baseBranch"
-    | "runMode"
-    | "backgroundCwd"
-    | "overlapPolicy"
-    | "enabled"
-  >
->;
 
 declare module "./index.js" {
   interface SqliteStore {
     listScheduledAgents(): ScheduledAgent[];
     findScheduledAgent(id: string): ScheduledAgent | null;
     insertScheduledAgent(agent: ScheduledAgent): void;
-    updateScheduledAgent(id: string, patch: ScheduledAgentPatch): ScheduledAgent | null;
+    updateScheduledAgent(
+      id: string,
+      patch: Partial<
+        Pick<
+          ScheduledAgent,
+          | "name"
+          | "description"
+          | "scheduleType"
+          | "cron"
+          | "runAt"
+          | "repoId"
+          | "runtimeId"
+          | "prompt"
+          | "workspaceStrategy"
+          | "workspaceName"
+          | "baseBranch"
+          | "runMode"
+          | "backgroundCwd"
+          | "overlapPolicy"
+          | "enabled"
+        >
+      >,
+    ): ScheduledAgent | null;
     recordScheduledAgentRun(
       id: string,
       update: {
@@ -101,7 +98,30 @@ export const scheduledAgentStoreMethods = {
       );
   },
 
-  updateScheduledAgent(this: SqliteStore, id: string, patch: ScheduledAgentPatch): ScheduledAgent | null {
+  updateScheduledAgent(
+    this: SqliteStore,
+    id: string,
+    patch: Partial<
+      Pick<
+        ScheduledAgent,
+        | "name"
+        | "description"
+        | "scheduleType"
+        | "cron"
+        | "runAt"
+        | "repoId"
+        | "runtimeId"
+        | "prompt"
+        | "workspaceStrategy"
+        | "workspaceName"
+        | "baseBranch"
+        | "runMode"
+        | "backgroundCwd"
+        | "overlapPolicy"
+        | "enabled"
+      >
+    >,
+  ): ScheduledAgent | null {
     const existing = this.findScheduledAgent(id);
     if (!existing) return null;
     const next: ScheduledAgent = {

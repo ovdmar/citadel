@@ -1,40 +1,37 @@
-import type { AgentRuntime, Namespace, Repo, Workspace } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import type { Repo } from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
 import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import {
+  type StateResponse,
+  addOptimisticCheckout,
+  createOptimisticCheckout,
+  reconcileOptimisticCheckout,
+  removeOptimisticCheckout,
+} from "./app-state.js";
 import { Button } from "./components/ui/button.js";
+import { type GroupKey, type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
+import { repoNameWithOwner } from "./repo-labels.js";
 import { useToast } from "./toast.js";
-
-export type GroupKey = "repo" | "status" | "namespace" | "none";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 const GROUP_BY_OPTIONS: Array<{ id: GroupKey; label: string; hint: string }> = [
-  { id: "repo", label: "Repository", hint: "citadel · skills · …" },
-  { id: "status", label: "Status", hint: "running · review · idle" },
-  // Namespace mode nests under Repository so two workspaces named "main" in
-  // different repos don't collapse together. The nav tree builder owns that
-  // two-level shape; this menu just exposes the toggle.
-  { id: "namespace", label: "Namespace", hint: "repo → namespace" },
-  { id: "none", label: "No grouping", hint: "flat list" },
+  { id: "workspace", label: "Workspace", hint: "workspace -> worktrees" },
+  { id: "repo", label: "Repository", hint: "citadel / skills / ..." },
+  { id: "status", label: "Status", hint: "running / review / idle" },
+  { id: "namespace", label: "Namespace", hint: "demo / platform / uncategorized" },
 ];
 
 type GroupByMenuProps = {
-  value: GroupKey;
-  onChange: (next: GroupKey) => void;
+  value: NavigatorGrouping;
+  onChange: (next: NavigatorGrouping) => void;
   onClose: () => void;
-  // When provided, the click-outside check uses this container instead of
-  // the menu's inner ref. The wrapping container in the navigator includes
-  // BOTH the menu and its trigger button, so clicking the trigger doesn't
-  // fire onClose just before the trigger's own onClick toggles state back
-  // on (the bug the user reported as "doesn't close when clicking outside").
   containerRef?: { current: HTMLElement | null };
 };
 
 export function GroupByMenu(props: GroupByMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
-  // Re-read on every event from the ref objects, not from the props closure,
-  // so the listener installs once. Capturing props in the effect deps caused
-  // the effect to re-run every render (props is a fresh object identity).
   const onCloseRef = useRef(props.onClose);
   onCloseRef.current = props.onClose;
   const containerRefProp = props.containerRef;
@@ -55,21 +52,18 @@ export function GroupByMenu(props: GroupByMenuProps) {
     };
   }, [containerRefProp]);
   return (
-    <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group workspaces">
-      <div className="cit-gb-menu-head">Group workspaces by</div>
+    <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group worktrees">
+      <div className="cit-gb-menu-head">Group worktrees by</div>
       {GROUP_BY_OPTIONS.map((option) => (
         <button
           key={option.id}
           type="button"
-          role="menuitemradio"
-          aria-checked={props.value === option.id}
-          className={`cit-gb-opt ${props.value === option.id ? "is-active" : ""}`}
-          onClick={() => {
-            props.onChange(option.id);
-            props.onClose();
-          }}
+          role="menuitemcheckbox"
+          aria-checked={props.value.includes(option.id)}
+          className={`cit-gb-opt ${props.value.includes(option.id) ? "is-active" : ""}`}
+          onClick={() => props.onChange(nextGroupingSelection(props.value, option.id))}
         >
-          <span className="cit-gb-opt-check">{props.value === option.id ? <Check size={11} /> : null}</span>
+          <span className="cit-gb-opt-check">{props.value.includes(option.id) ? <Check size={11} /> : null}</span>
           <span className="cit-gb-opt-text">
             <span className="cit-gb-opt-label">{option.label}</span>
             <span className="cit-gb-opt-hint">{option.hint}</span>
@@ -80,357 +74,104 @@ export function GroupByMenu(props: GroupByMenuProps) {
   );
 }
 
-type AddRepoSearchHit = {
-  name: string;
-  url: string;
-  description?: string;
-  defaultBranch?: string;
-};
-
-type AddRepoModalProps = {
-  onClose: () => void;
-  workspaceRoot?: string;
-};
-
-export function AddRepoModal(props: AddRepoModalProps) {
-  const [mode, setMode] = useState<"path" | "url" | "search">("path");
-  const [path, setPath] = useState("");
-  const [url, setUrl] = useState("");
-  const [query, setQuery] = useState("");
-  const [name, setName] = useState("");
-  const [worktreeParent, setWorktreeParent] = useState("");
-  const [error, setError] = useState("");
-
-  const inspect = useMutation({
-    mutationFn: () =>
-      api<{ rootPath: string; isGit: boolean; suggestedWorktreeParent: string }>("/api/repos/inspect", {
-        method: "POST",
-        body: JSON.stringify({ rootPath: path }),
-      }),
-    onSuccess: (result) => {
-      if (result.isGit && !worktreeParent) setWorktreeParent(result.suggestedWorktreeParent);
-    },
-  });
-
-  const search = useQuery<{ results: AddRepoSearchHit[]; error?: string }>({
-    queryKey: ["gh-repo-search", query],
-    enabled: mode === "search" && query.trim().length >= 2,
-    queryFn: () =>
-      api<{ results: AddRepoSearchHit[]; error?: string }>(
-        `/api/integrations/github/search?q=${encodeURIComponent(query)}`,
-      ).catch((error_) => ({ results: [], error: error_ instanceof Error ? error_.message : "search_failed" })),
-  });
-
-  const register = useMutation({
-    mutationFn: () =>
-      api("/api/repos", {
-        method: "POST",
-        body: JSON.stringify({
-          rootPath: path,
-          name: name || undefined,
-          worktreeParent: worktreeParent || undefined,
-        }),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-      props.onClose();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "register_failed"),
-  });
-
-  const clone = useMutation({
-    mutationFn: (target: { url: string; suggestedName?: string }) =>
-      api<{ rootPath: string; cloned: boolean; error?: string }>("/api/integrations/github/clone", {
-        method: "POST",
-        body: JSON.stringify({
-          url: target.url,
-          targetDir: props.workspaceRoot || undefined,
-        }),
-      }),
-    onSuccess: (result) => {
-      if (result.error) {
-        setError(result.error);
-        return;
-      }
-      setMode("path");
-      setPath(result.rootPath);
-      inspect.mutate();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "clone_failed"),
-  });
-
-  return (
-    <Modal title="Add repository" onClose={props.onClose}>
-      <div className="tab-strip" role="tablist">
-        <button type="button" className={mode === "path" ? "active" : ""} onClick={() => setMode("path")}>
-          Local path
-        </button>
-        <button type="button" className={mode === "url" ? "active" : ""} onClick={() => setMode("url")}>
-          GitHub URL
-        </button>
-        <button type="button" className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>
-          GitHub search
-        </button>
-      </div>
-      <div className="modal-form">
-        {mode === "path" ? (
-          <>
-            <label>
-              Repository path
-              <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/home/me/project" />
-            </label>
-            <label>
-              Display name (optional)
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project" />
-            </label>
-            <label>
-              Worktree parent (optional)
-              <input
-                value={worktreeParent}
-                onChange={(event) => setWorktreeParent(event.target.value)}
-                placeholder={inspect.data?.suggestedWorktreeParent ?? "/path/to/worktree-parent"}
-              />
-            </label>
-          </>
-        ) : null}
-        {mode === "url" ? (
-          <>
-            <label>
-              GitHub URL
-              <input
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://github.com/org/repo"
-              />
-            </label>
-            <p className="empty compact">
-              Citadel runs <code>gh repo clone</code> into{" "}
-              <code>{props.workspaceRoot || "~/Workspace"}/&lt;repo&gt;</code> when the repo is not local yet, then
-              registers the result here.
-            </p>
-            <div className="stack-form-actions">
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!url || clone.isPending}
-                onClick={() => clone.mutate({ url })}
-              >
-                {clone.isPending ? "Cloning…" : "Clone & continue"}
-              </Button>
-            </div>
-          </>
-        ) : null}
-        {mode === "search" ? (
-          <>
-            <label>
-              Search GitHub
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="org/keyword" />
-            </label>
-            {search.data?.error ? <div className="empty compact">{search.data.error}</div> : null}
-            <div className="check-list">
-              {(search.data?.results ?? []).map((hit) => (
-                <button
-                  key={hit.url}
-                  type="button"
-                  className="check-row"
-                  onClick={() => clone.mutate({ url: hit.url })}
-                >
-                  <span>
-                    <strong>{hit.name}</strong>
-                    <span className="command-result-meta">{hit.description ?? hit.url}</span>
-                  </span>
-                  <span className="tone-pending">Clone</span>
-                </button>
-              ))}
-              {!search.data?.results?.length && query.length >= 2 && !search.isLoading ? (
-                <div className="empty compact">
-                  No results yet. Searching requires <code>gh</code> authentication.
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-        {error ? (
-          <div className="empty compact" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </div>
-        ) : null}
-      </div>
-      {mode === "path" ? (
-        <div className="modal-footer">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => inspect.mutate()}
-            disabled={!path || inspect.isPending}
-          >
-            Inspect
-          </Button>
-          <Button
-            type="button"
-            disabled={!path || !inspect.data?.isGit || register.isPending}
-            onClick={() => register.mutate()}
-          >
-            {register.isPending ? "Saving…" : "Register repo"}
-          </Button>
-        </div>
-      ) : (
-        <div className="modal-footer">
-          <Button type="button" variant="secondary" onClick={props.onClose}>
-            Close
-          </Button>
-        </div>
-      )}
-    </Modal>
-  );
+function nextGroupingSelection(current: NavigatorGrouping, option: GroupKey): NavigatorGrouping {
+  const selected = current.includes(option);
+  if (selected) {
+    const next = current.filter((key) => key !== option);
+    return normalizeNavigatorGrouping(next.length ? next : ["workspace"]);
+  }
+  if (option === "workspace") {
+    return normalizeNavigatorGrouping([...current.filter((key) => key === "namespace"), "workspace"]);
+  }
+  if (option === "namespace") {
+    return normalizeNavigatorGrouping(["namespace", "workspace"]);
+  }
+  const next = current.filter((key) => key !== "workspace");
+  next.push(option);
+  return normalizeNavigatorGrouping(next);
 }
 
 type CreateWorkspaceModalProps = {
   repos: Repo[];
-  lastRepoId?: string;
-  runtimes: AgentRuntime[];
-  namespaces?: Namespace[];
+  grouping?: NavigatorGrouping;
+  intent?: CreateWorkspaceIntent;
   onClose: () => void;
-  onCreated: (workspaceId: string) => void;
+  onCreated: (workspaceId: string, targetKey?: string) => void;
 };
 
-type LinkedContext = {
-  source: "scratch" | "issue" | "pr";
-  issueKey?: string;
-  issueUrl?: string;
-  prUrl?: string;
-  slackThreadUrl?: string;
+type CreateWorkspaceResult = {
+  workspaceId: string;
+  targetKey?: string;
 };
 
-const JIRA_KEY_FROM_URL = /\/browse\/([A-Z][A-Z0-9]+-\d+)/i;
-const JIRA_KEY_BARE = /^[A-Z][A-Z0-9]+-\d+$/;
-const GITHUB_PR_URL = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i;
-const SLACK_URL = /^https?:\/\/[a-z0-9.-]*slack\.com\//i;
-const WORKSPACE_READY_POLL_MS = 1000;
-const WORKSPACE_READY_MAX_ATTEMPTS = 180;
+export type CreateWorkspaceIntent =
+  | { kind: "auto" }
+  | { kind: "attach-worktree"; workspaceId: string; workspaceName: string };
 
-// Parse the freeform "link" field — Jira issue, GitHub PR, or Slack thread —
-// into the structured fields the workspace API expects. Returning a `source`
-// here is what flips workspaceBranchName into JIRA-style branch generation.
-function parseLinkedContext(input: string): LinkedContext {
-  const value = input.trim();
-  if (!value) return { source: "scratch" };
-  const jiraUrl = value.match(JIRA_KEY_FROM_URL);
-  if (jiraUrl?.[1]) return { source: "issue", issueKey: jiraUrl[1].toUpperCase(), issueUrl: value };
-  if (JIRA_KEY_BARE.test(value)) return { source: "issue", issueKey: value.toUpperCase() };
-  if (GITHUB_PR_URL.test(value)) return { source: "pr", prUrl: value };
-  if (SLACK_URL.test(value)) return { source: "scratch", slackThreadUrl: value };
-  return { source: "scratch" };
-}
+export type CreateWorkspaceContext = "workspace-home" | "attach-worktree";
 
-function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 72);
-}
-
-// Mirror packages/core's workspaceBranchName so we can preview the branch the
-// daemon will create without round-tripping. Keep in sync if that helper moves.
-function defaultBranchPreview(linked: LinkedContext, name: string): string {
-  if (linked.source === "issue" && linked.issueKey) return linked.issueKey;
-  const slug = slugify(name);
-  return slug || "workspace";
-}
-
-// Hint shown in the modal's name input placeholder. For scratch workspaces
-// the daemon generates a memorable funny-name (e.g. funny-cat) when none
-// is provided, so the placeholder telegraphs that. For issue-linked
-// workspaces the placeholder shows the derived name (issue key lowercased).
-function defaultNameHint(linked: LinkedContext): string {
-  if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
-  return "e.g. funny-cat (auto)";
-}
-
-// Effective name to send to the daemon when the user leaves the field
-// blank. Empty string lets the daemon generate. Issue-linked workspaces
-// still derive from the issue key client-side to keep branch preview
-// accurate.
-function defaultNameForSubmit(linked: LinkedContext): string {
-  if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
-  return "";
+export function resolveCreateWorkspaceContext(
+  intent: CreateWorkspaceIntent | undefined,
+  _grouping: NavigatorGrouping | undefined,
+): CreateWorkspaceContext {
+  if (intent?.kind === "attach-worktree") return "attach-worktree";
+  return "workspace-home";
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  useOverlayPresent();
   const toast = useToast();
-  const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
-  const [repoId, setRepoId] = useState(initialRepo);
-  const [prompt, setPrompt] = useState("");
-  const [linkInput, setLinkInput] = useState("");
+  const creationContext = resolveCreateWorkspaceContext(props.intent, props.grouping);
   const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
-  const [namespaceId, setNamespaceId] = useState("");
-
-  const launchableRuntimes = useMemo(
-    () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
-    [props.runtimes],
-  );
-  const defaultRuntimeId = useMemo(() => {
-    if (launchableRuntimes.some((runtime) => runtime.id === "claude-code")) return "claude-code";
-    return launchableRuntimes[0]?.id ?? "";
-  }, [launchableRuntimes]);
-  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
-  useEffect(() => {
-    if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);
-  }, [defaultRuntimeId, runtimeId]);
-
-  const linked = useMemo(() => parseLinkedContext(linkInput), [linkInput]);
-  const namePreview = defaultNameHint(linked);
-  // Branch preview: when the user has neither typed a name nor attached
-  // an issue, the daemon will generate the name (and the branch name
-  // follows from it), so we can't honestly preview either. Show
-  // `<auto>` in that case rather than fabricating "workspace" — which
-  // the user never typed and the daemon won't use.
+  const [worktreeName, setWorktreeName] = useState("");
+  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([]);
+  const [attachPending, setAttachPending] = useState(false);
+  const mountedRef = useRef(true);
+  const nameRef = useRef<HTMLInputElement | null>(null);
   const trimmedName = name.trim();
-  const submitName = defaultNameForSubmit(linked);
-  const branchPreview = trimmedName || submitName ? defaultBranchPreview(linked, trimmedName || submitName) : "<auto>";
+  const trimmedWorktreeName = worktreeName.trim();
+  const singleSelectedAttachRepo = creationContext === "attach-worktree" && selectedRepoIds.length === 1;
 
-  const promptRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
-    promptRef.current?.focus();
+    const validRepoIds = new Set(props.repos.map((repo) => repo.id));
+    setSelectedRepoIds((previous) => {
+      const next = previous.filter((repoId) => validRepoIds.has(repoId));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [props.repos]);
+  useEffect(() => {
+    nameRef.current?.focus();
   }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
-  const create = useMutation({
-    mutationFn: async () => {
-      const trimmed = name.trim();
-      const payload: Record<string, unknown> = {
-        repoId,
-        // Empty string signals "daemon should generate a funny-name". The
-        // issue-linked path still sends the issue-key-lowercased default
-        // for backwards-compatible branch-name derivation.
-        name: trimmed || defaultNameForSubmit(linked),
-        source: linked.source,
-      };
-      if (linked.issueKey) payload.issueKey = linked.issueKey;
-      if (linked.issueUrl) payload.issueUrl = linked.issueUrl;
-      if (linked.prUrl) payload.prUrl = linked.prUrl;
-      if (linked.slackThreadUrl) payload.slackThreadUrl = linked.slackThreadUrl;
-      const customBranch = branch.trim();
-      if (customBranch) payload.existingBranch = customBranch;
-      if (namespaceId) payload.namespaceId = namespaceId;
-      const result = await api<{ workspaceId: string }>("/api/workspaces", {
+  const createHome = useMutation({
+    mutationFn: async (): Promise<CreateWorkspaceResult> => {
+      const result = await api<{ workspaceId: string }>("/api/workspaces/home", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ name: trimmedName, source: "scratch" }),
       });
-      if (runtimeId) {
-        void launchAgentWhenWorkspaceReady(result.workspaceId, runtimeId, prompt.trim()).catch((error) => {
-          toast.push({
-            tone: "error",
-            message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
-          });
-        });
+      let targetKey: string | undefined;
+      for (const selectedRepoId of selectedRepoIds) {
+        const checkout = await api<{ checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(result.workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify({ repoId: selectedRepoId, source: "default_branch" }),
+          },
+        );
+        if (selectedRepoIds.length === 1) targetKey = `checkout:${checkout.checkoutId}`;
       }
-      return result;
+      return targetKey ? { workspaceId: result.workspaceId, targetKey } : result;
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      props.onCreated(result.workspaceId);
+      if (result.targetKey) props.onCreated(result.workspaceId, result.targetKey);
+      else props.onCreated(result.workspaceId);
     },
     onError: (err) => {
       toast.push({
@@ -440,99 +181,130 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     },
   });
 
-  const linkBadge =
-    linked.source === "issue"
-      ? `Linked Jira: ${linked.issueKey}`
-      : linked.source === "pr"
-        ? "Linked GitHub PR"
-        : linked.slackThreadUrl
-          ? "Linked Slack thread"
-          : "";
+  const createAttachWorktrees = async () => {
+    if (!selectedRepoIds.length) return;
+    const workspaceId = props.intent?.kind === "attach-worktree" ? props.intent.workspaceId : "";
+    const pending: Array<{ repo: Repo; optimisticId: string | null; settled: boolean }> = [];
+    setAttachPending(true);
+    try {
+      for (const selectedRepoId of selectedRepoIds) {
+        const repo = props.repos.find((entry) => entry.id === selectedRepoId);
+        if (!repo) throw new Error("repo_required");
+        const requestedName = singleSelectedAttachRepo && trimmedWorktreeName ? trimmedWorktreeName : null;
+        pending.push({
+          repo,
+          optimisticId: addOptimisticCheckoutToState({ workspaceId, repo, requestedName }),
+          settled: false,
+        });
+      }
+
+      const optimisticTarget =
+        pending.length === 1 && pending[0]?.optimisticId ? `checkout:${pending[0].optimisticId}` : undefined;
+      if (optimisticTarget) props.onCreated(workspaceId, optimisticTarget);
+      else if (pending.some((entry) => entry.optimisticId)) props.onCreated(workspaceId);
+
+      let targetKey: string | undefined;
+      for (const entry of pending) {
+        const payload: Record<string, unknown> = { repoId: entry.repo.id, source: "default_branch" };
+        if (singleSelectedAttachRepo && trimmedWorktreeName) {
+          payload.name = trimmedWorktreeName;
+          payload.displayName = trimmedWorktreeName;
+        }
+        const result = await api<{ checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        if (entry.optimisticId) {
+          const optimisticId = entry.optimisticId;
+          entry.settled = true;
+          queryClient.setQueryData<StateResponse>(["state"], (previous) =>
+            reconcileOptimisticCheckout(previous, optimisticId, result.checkoutId),
+          );
+        }
+        if (selectedRepoIds.length === 1) targetKey = `checkout:${result.checkoutId}`;
+      }
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (targetKey) props.onCreated(workspaceId, targetKey);
+      else props.onCreated(workspaceId);
+    } catch (err) {
+      for (const entry of pending) {
+        if (!entry.optimisticId || entry.settled) continue;
+        const optimisticId = entry.optimisticId;
+        queryClient.setQueryData<StateResponse>(["state"], (previous) =>
+          removeOptimisticCheckout(previous, optimisticId),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      toast.push({
+        tone: "error",
+        message: `Workspace creation failed: ${err instanceof Error ? err.message : "create_failed"}`,
+      });
+    } finally {
+      if (mountedRef.current) setAttachPending(false);
+    }
+  };
+
+  const modalTitle =
+    creationContext === "attach-worktree"
+      ? `Add worktree to ${props.intent?.kind === "attach-worktree" ? props.intent.workspaceName : "workspace"}`
+      : "New workspace";
+  const pending = creationContext === "attach-worktree" ? attachPending : createHome.isPending;
+  const submitLabel = pending
+    ? "Creating..."
+    : creationContext === "attach-worktree"
+      ? selectedRepoIds.length > 1
+        ? "Add worktrees"
+        : "Add worktree"
+      : selectedRepoIds.length
+        ? "Create workspace and worktrees"
+        : "Create workspace";
+  const disabled =
+    pending ||
+    (creationContext === "workspace-home"
+      ? !trimmedName
+      : !selectedRepoIds.length || props.intent?.kind !== "attach-worktree");
 
   return (
-    <Modal title="New workspace" onClose={props.onClose}>
+    <Modal title={modalTitle} onClose={props.onClose}>
       <div className="modal-form workspace-modal">
-        <label className="workspace-modal-prompt">
-          Initial prompt
-          <textarea
-            ref={promptRef}
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="What should the agent do? (optional — leave empty to start the agent with no instructions)"
-            rows={4}
-          />
-        </label>
-        <div className="workspace-modal-row">
-          <label>
-            Agent
-            <select value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)}>
-              <option value="">No agent — workspace only</option>
-              {launchableRuntimes.map((runtime) => (
-                <option key={runtime.id} value={runtime.id}>
-                  {runtime.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Repository
-            <select value={repoId} onChange={(event) => setRepoId(event.target.value)}>
-              {props.repos.map((repo) => (
-                <option key={repo.id} value={repo.id}>
-                  {repo.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {props.namespaces?.length ? (
-          <label>
-            Namespace
-            <select value={namespaceId} onChange={(event) => setNamespaceId(event.target.value)}>
-              <option value="">Uncategorized</option>
-              {props.namespaces.map((namespace) => (
-                <option key={namespace.id} value={namespace.id}>
-                  {namespace.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <details className="workspace-modal-advanced">
-          <summary>Optional: link, name, branch</summary>
-          <label>
-            Link Jira / GitHub PR / Slack URL
-            <input
-              value={linkInput}
-              onChange={(event) => setLinkInput(event.target.value)}
-              placeholder="ABC-123, https://…/browse/ABC-123, github.com/x/y/pull/42, or slack.com/…"
-            />
-            {linkBadge ? <span className="workspace-modal-badge">{linkBadge}</span> : null}
-          </label>
-          <div className="workspace-modal-row">
+        {creationContext === "workspace-home" ? (
+          <>
             <label>
               Workspace name
               <input
+                ref={nameRef}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder={`Defaults to ${namePreview}`}
+                placeholder="workspace-name"
               />
             </label>
+            {props.repos.length ? (
+              <RepoMultiPicker repos={props.repos} selected={selectedRepoIds} onChange={setSelectedRepoIds} />
+            ) : null}
+          </>
+        ) : (
+          <>
+            <RepoMultiPicker
+              label="Repositories"
+              repos={props.repos}
+              selected={selectedRepoIds}
+              onChange={setSelectedRepoIds}
+            />
             <label>
-              Branch
+              Worktree name
               <input
-                value={branch}
-                onChange={(event) => setBranch(event.target.value)}
-                placeholder={`Defaults to ${branchPreview}`}
+                ref={nameRef}
+                value={worktreeName}
+                onChange={(event) => setWorktreeName(event.target.value)}
+                placeholder={selectedRepoIds.length > 1 ? "Auto-generated for multiple repos" : "Optional"}
+                disabled={!singleSelectedAttachRepo}
               />
             </label>
-          </div>
-        </details>
-        {!launchableRuntimes.length ? (
-          <div className="empty compact">
-            No healthy agents configured. The workspace will be created without launching one.
-          </div>
-        ) : null}
+          </>
+        )}
       </div>
       <div className="modal-footer">
         <Button type="button" variant="secondary" onClick={props.onClose}>
@@ -540,37 +312,109 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         </Button>
         <Button
           type="button"
-          disabled={!repoId || create.isPending}
+          disabled={disabled}
           onClick={() => {
-            create.mutate();
-            props.onClose();
+            if (creationContext === "attach-worktree") void createAttachWorktrees();
+            else createHome.mutate();
           }}
         >
-          {create.isPending ? "Creating…" : runtimeId ? "Create & launch agent" : "Create workspace"}
+          {submitLabel}
         </Button>
       </div>
     </Modal>
   );
 }
 
-async function launchAgentWhenWorkspaceReady(workspaceId: string, runtimeId: string, prompt: string) {
-  for (let attempt = 0; attempt < WORKSPACE_READY_MAX_ATTEMPTS; attempt += 1) {
-    const state = await api<{ workspaces: Array<Pick<Workspace, "id" | "lifecycle">> }>("/api/workspaces");
-    const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
-    if (workspace?.lifecycle === "ready") {
-      const sessionPayload: Record<string, unknown> = { workspaceId, runtimeId };
-      if (prompt) sessionPayload.prompt = prompt;
-      await api("/api/agent-sessions", {
-        method: "POST",
-        body: JSON.stringify(sessionPayload),
-      });
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-      return;
-    }
-    if (workspace?.lifecycle === "failed") throw new Error("workspace_setup_failed");
-    await new Promise((resolve) => window.setTimeout(resolve, WORKSPACE_READY_POLL_MS));
-  }
-  throw new Error("workspace_setup_timeout");
+function RepoMultiPicker(props: {
+  label?: string;
+  repos: Repo[];
+  selected: string[];
+  onChange: (repoIds: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => filterRepos(props.repos, query), [props.repos, query]);
+  const selected = new Set(props.selected);
+  return (
+    <div className="workspace-repo-picker">
+      <label>
+        {props.label ?? "Initial worktrees"}
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search repositories..."
+          spellCheck={false}
+        />
+      </label>
+      <div className="workspace-repo-options">
+        {filtered.map((repo) => {
+          const checked = selected.has(repo.id);
+          return (
+            <label key={repo.id} className={`workspace-repo-option ${checked ? "is-selected" : ""}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => {
+                  if (checked) props.onChange(props.selected.filter((id) => id !== repo.id));
+                  else props.onChange([...props.selected, repo.id]);
+                }}
+              />
+              <span>
+                <strong>{repoNameWithOwner(repo)}</strong>
+                <small>{repo.rootPath}</small>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function filterRepos(repos: Repo[], query: string): Repo[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return repos;
+  return repos.filter((repo) => {
+    const label = repoNameWithOwner(repo).toLowerCase();
+    return (
+      label.includes(needle) || repo.name.toLowerCase().includes(needle) || repo.rootPath.toLowerCase().includes(needle)
+    );
+  });
+}
+
+function addOptimisticCheckoutToState(input: {
+  workspaceId: string;
+  repo: Repo;
+  requestedName: string | null;
+}): string | null {
+  const state = queryClient.getQueryData<StateResponse>(["state"]);
+  const workspace = state?.workspaces.find((entry) => entry.id === input.workspaceId);
+  if (!state || !workspace) return null;
+  const name = optimisticCheckoutName(input.repo, input.requestedName);
+  const optimisticId = optimisticCheckoutId();
+  const checkout = createOptimisticCheckout({
+    id: optimisticId,
+    workspace,
+    repo: input.repo,
+    name,
+    displayName: input.requestedName,
+    branch: name,
+    now: new Date().toISOString(),
+  });
+  queryClient.setQueryData<StateResponse>(["state"], (previous) => addOptimisticCheckout(previous, checkout));
+  return optimisticId;
+}
+
+function optimisticCheckoutName(repo: Repo, requestedName: string | null): string {
+  const slug = (requestedName ?? repo.name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return slug || "checkout";
+}
+
+function optimisticCheckoutId(): string {
+  return `co_optimistic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {

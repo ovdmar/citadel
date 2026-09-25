@@ -7,12 +7,12 @@
 // Two callers:
 //   1) POST /api/scratchpad/refine (HTTP, used by the cockpit's Refine modal).
 //   2) `refine_scratchpad` MCP tool handler (used by external agents).
-import type { CitadelConfig } from "@citadel/config";
-import type { LaunchAgentInput, ProviderHealth } from "@citadel/contracts";
+import type { AgentRuntimeConfig, CitadelConfig } from "@citadel/config";
+import type { AgentRuntime, LaunchAgentInput, ProviderHealth } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { BUILT_IN_REFINE_SCRATCHPAD, getCitadelAction } from "./citadel-actions.js";
+import { BUILT_IN_REFINE_SCRATCHPAD, DEFAULT_CITADEL_ACTION_RUNTIME_ID, getCitadelAction } from "./citadel-actions.js";
 
 export type RefineSuccess = {
   ok: true;
@@ -35,7 +35,6 @@ export type RefineInput = {
   prompt?: string;
 };
 
-const RUNTIME_ID = "claude-code";
 const IN_PROGRESS_TOKEN = "in-progress";
 
 export type RefineDeps = {
@@ -45,40 +44,32 @@ export type RefineDeps = {
   providerHealth: () => Promise<ProviderHealth[]>;
 };
 
+type RuntimeResolution =
+  | { ok: true; runtimeConfig: AgentRuntimeConfig; fallbackWarning?: string }
+  | { ok: false; detail: string };
+
 export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Promise<RefineResult> {
   const { config, store, operations, providerHealth } = deps;
 
   // 1) Resolve prompt — explicit override, else saved Citadel Action, else
   //    built-in default (which is what the action would have seeded with).
+  const action = await getCitadelAction(config.dataDir, BUILT_IN_REFINE_SCRATCHPAD.id);
   let prompt = input.prompt;
   if (!prompt) {
-    const saved = await getCitadelAction(config.dataDir, BUILT_IN_REFINE_SCRATCHPAD.id);
-    prompt = saved?.promptTemplate ?? BUILT_IN_REFINE_SCRATCHPAD.promptTemplate;
+    prompt = action?.promptTemplate ?? BUILT_IN_REFINE_SCRATCHPAD.promptTemplate;
   }
   if (!prompt || prompt.trim().length === 0) {
     return { ok: false, error: "invalid_input", detail: "prompt_required" };
   }
 
-  // 2) Runtime check (provider-degradation gate). config.runtimes has the
-  //    invocation spec (command/args/promptArg) we need for launchAgent;
-  //    listRuntimeHealth() layers PATH-resolution + health on top.
-  const runtimeConfig = config.runtimes.find((r) => r.id === RUNTIME_ID);
-  if (!runtimeConfig) {
-    return {
-      ok: false,
-      error: "runtime_unavailable",
-      detail: `Runtime '${RUNTIME_ID}' is not configured. Add it in Settings → Agent runtimes.`,
-    };
-  }
-  const healthList = listRuntimeHealth(config.runtimes);
-  const claudeCode = healthList.find((r) => r.id === RUNTIME_ID);
-  if (claudeCode?.health === "unavailable") {
-    return {
-      ok: false,
-      error: "runtime_unavailable",
-      detail: claudeCode.healthReason ?? `Runtime '${RUNTIME_ID}' is unavailable.`,
-    };
-  }
+  // 2) Runtime check (provider-degradation gate). Citadel Actions store a
+  //    preferred runtime, but launches should degrade to another configured
+  //    agent runtime when the preference is missing or unavailable.
+  const preferredRuntimeId = action?.runtimeId ?? BUILT_IN_REFINE_SCRATCHPAD.runtimeId;
+  const healthList = listRuntimeHealth(config.agentRuntimes);
+  const runtimeResolution = resolveCitadelActionRuntime(config.agentRuntimes, healthList, preferredRuntimeId);
+  if (!runtimeResolution.ok) return { ok: false, error: "runtime_unavailable", detail: runtimeResolution.detail };
+  const { runtimeConfig } = runtimeResolution;
 
   // 3) Resolve repo — explicit repoId, else repoName lookup, else fall back to
   //    the most-recently-active workspace's repo, else the first registered.
@@ -104,18 +95,19 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
   }
 
   // 4) Soft warning if the prompt doesn't mention `in-progress` (case-insensitive).
-  let warning: string | undefined;
+  const warnings: string[] = [];
   if (!prompt.toLowerCase().includes(IN_PROGRESS_TOKEN)) {
-    warning =
-      "Your refine prompt does not mention 'in-progress' — blocks owned by other agents may be modified by the refine agent.";
+    warnings.push(
+      "Your refine prompt does not mention 'in-progress' — blocks owned by other agents may be modified by the refine agent.",
+    );
   }
+  if (runtimeResolution.fallbackWarning) warnings.push(runtimeResolution.fallbackWarning);
   // Also surface provider unavailability as a softer warning (not a block; it
   // mirrors how launch_agent behaves today — we don't refuse the launch).
   const providerHealthList = await providerHealth();
   const degraded = providerHealthList.find((p) => p.status === "unavailable");
-  if (degraded && !warning) {
-    warning = `Provider '${degraded.displayName}' is currently unavailable; the agent may not complete.`;
-  }
+  if (degraded)
+    warnings.push(`Provider '${degraded.displayName}' is currently unavailable; the agent may not complete.`);
 
   // 5) Launch. workspaceName must satisfy the launch input's 80-char limit and
   //    project naming conventions, so we truncate the ISO stamp to minute.
@@ -125,7 +117,7 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
   const launchInput: LaunchAgentInput = {
     repoId: resolvedRepoId,
     prompt,
-    runtimeId: RUNTIME_ID,
+    runtimeId: runtimeConfig.id,
     workspaceName,
   };
 
@@ -142,7 +134,7 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
       sessionId: result.sessionId ?? null,
       operationId: result.operationId,
     };
-    if (warning) out.warning = warning;
+    if (warnings.length > 0) out.warning = warnings.join(" ");
     return out;
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown_error";
@@ -166,4 +158,52 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
     if (leftBehindWorkspaceId) failure.workspaceId = leftBehindWorkspaceId;
     return failure;
   }
+}
+
+export function resolveCitadelActionRuntime(
+  runtimes: AgentRuntimeConfig[],
+  runtimeHealth: AgentRuntime[],
+  preferredRuntimeId: string = DEFAULT_CITADEL_ACTION_RUNTIME_ID,
+): RuntimeResolution {
+  const healthById = new Map(runtimeHealth.map((runtime) => [runtime.id, runtime]));
+  const preferred = runtimes.find((runtime) => runtime.id === preferredRuntimeId);
+  const ordered = preferred ? [preferred, ...runtimes.filter((runtime) => runtime.id !== preferred.id)] : runtimes;
+  const preferredProblem = runtimeProblem(preferred, healthById.get(preferredRuntimeId), preferredRuntimeId);
+
+  for (const runtime of ordered) {
+    if (runtimeProblem(runtime, healthById.get(runtime.id), runtime.id)) continue;
+    if (runtime.id === preferredRuntimeId) return { ok: true, runtimeConfig: runtime };
+    return {
+      ok: true,
+      runtimeConfig: runtime,
+      fallbackWarning: preferredProblem
+        ? `${preferredProblem} Launched '${runtime.id}' instead.`
+        : `Preferred runtime '${preferredRuntimeId}' was skipped. Launched '${runtime.id}' instead.`,
+    };
+  }
+
+  return {
+    ok: false,
+    detail: preferredProblem
+      ? `${preferredProblem} No other configured agent runtime is available.`
+      : "No configured agent runtime is available.",
+  };
+}
+
+function runtimeProblem(
+  runtime: AgentRuntimeConfig | undefined,
+  health: AgentRuntime | undefined,
+  runtimeId: string,
+): string | null {
+  if (!runtime) return `Runtime '${runtimeId}' is not configured.`;
+  if (!isAgentRuntime(runtime)) return `Runtime '${runtime.id}' is not an agent runtime.`;
+  if (health?.health === "unavailable") {
+    return health.healthReason ?? `Runtime '${runtime.id}' is unavailable.`;
+  }
+  return null;
+}
+
+function isAgentRuntime(runtime: AgentRuntimeConfig): boolean {
+  const command = runtime.command.split(/[\\/]/).pop() ?? runtime.command;
+  return !["bash", "sh", "zsh", "fish"].includes(command);
 }

@@ -1,283 +1,236 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import type http from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "@citadel/config";
-import type { ReviewComment, ReviewSuggestionRun } from "@citadel/contracts";
-import { SqliteStore } from "@citadel/db";
+import type { ReviewDiffFileContent, ReviewDiffMetadata } from "@citadel/contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeServer,
+  createFixture,
+  createGitFixtureWithRemote,
+  getJson,
+  listen,
+  postJson,
+} from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
-process.env.CITADEL_DISABLE_REAPER = "1";
-process.env.CITADEL_DISABLE_SCHEDULER = "1";
-
-describe("review routes — comments", () => {
-  it("supports a POST → GET → PATCH(409) → PATCH(200) → DELETE round-trip", async () => {
-    const fixture = createFixture();
-    const { repoId, workspaceId } = seedRepoAndWorkspace(fixture);
-    const { server } = createDaemonApp(fixture);
+describe("checkout review routes", () => {
+  it("serves committed, staged, and unstaged diff metadata with lazy file content", async () => {
+    const fixture = createFixture(dirs);
+    const git = createReviewGitFixture(fixture.config.dataDir);
+    registerReviewCheckout(fixture, git.repoPath, { withPr: true });
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
-      // 404 on unknown workspace
-      const unknown = await fetch(`${baseUrl}/api/workspaces/ws_missing/review-comments`);
-      expect(unknown.status).toBe(404);
+      const metadata = await getJson<ReviewDiffMetadata>(`${baseUrl}/api/checkouts/checkout_review/review-diff`);
 
-      // POST 201
-      const created = await postJson<{ comment: ReviewComment }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
-        { body: "Looks good but check this edge case" },
+      expect(metadata.reviewScope).toMatchObject({ externalReviewNumber: 42 });
+      expect(section(metadata, "against-base")?.files).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "README.md", status: "modified" })]),
       );
-      expect(created.comment.author).toBe("operator");
-      expect(created.comment.workspaceId).toBe(workspaceId);
-
-      // Second comment via clean body — confirms author stays 'operator' even
-      // on subsequent posts.
-      await postJson<{ comment: ReviewComment }>(`${baseUrl}/api/workspaces/${workspaceId}/review-comments`, {
-        body: "another",
-      });
-
-      // GET 200 with two comments
-      const list = await getJson<{ comments: ReviewComment[] }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
+      expect(section(metadata, "staged")?.files).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "staged.txt", status: "added", additions: 1 })]),
       );
-      expect(list.comments).toHaveLength(2);
-      expect(list.comments.every((c) => c.author === "operator")).toBe(true);
-
-      // PATCH 409 with stale token
-      const stale = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: "v2", ifUpdatedAtMatches: "1970-01-01T00:00:00.000Z" }),
-      });
-      expect(stale.status).toBe(409);
-
-      // PATCH 200 with fresh token
-      const fresh = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "resolved", ifUpdatedAtMatches: created.comment.updatedAt }),
-      });
-      expect(fresh.status).toBe(200);
-      const updated = (await fresh.json()) as { comment: ReviewComment };
-      expect(updated.comment.status).toBe("resolved");
-
-      // DELETE 204 with fresh token
-      const del = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ifUpdatedAtMatches: updated.comment.updatedAt }),
-      });
-      expect(del.status).toBe(204);
-
-      // GET hides soft-deleted by default
-      const after = await getJson<{ comments: ReviewComment[] }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
+      expect(section(metadata, "unstaged")?.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "README.md", status: "modified" }),
+          expect.objectContaining({ path: "loose.txt", status: "untracked", additions: 1 }),
+        ]),
       );
-      expect(after.comments).toHaveLength(1);
-      expect(after.comments[0]?.id).not.toBe(created.comment.id);
+      expect(metadata.commits.map((commit) => commit.subject)).toContain("committed change");
 
-      // includeDeleted=true brings it back
-      const withDeleted = await getJson<{ comments: ReviewComment[] }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments?includeDeleted=true`,
+      const stagedFile = section(metadata, "staged")?.files.find((file) => file.path === "staged.txt");
+      expect(stagedFile).toBeTruthy();
+      const content = await getJson<ReviewDiffFileContent>(
+        `${baseUrl}/api/checkouts/checkout_review/review-diff/file?fileId=${encodeURIComponent(stagedFile?.id ?? "")}`,
       );
-      expect(withDeleted.comments).toHaveLength(2);
-    } finally {
-      await closeServer(server);
-    }
-    // ensure repoId is referenced for the typed fixture
-    expect(repoId).toMatch(/^repo_/);
-  });
-
-  it("re-DELETE on a soft-deleted comment: stale token → 409, fresh token (post-tombstone) → 204", async () => {
-    const fixture = createFixture();
-    const { workspaceId } = seedRepoAndWorkspace(fixture);
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      const created = await postJson<{ comment: { id: string; updatedAt: string } }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
-        { body: "comment to delete twice" },
-      );
-      // First DELETE with the original token → 204.
-      const first = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ifUpdatedAtMatches: created.comment.updatedAt }),
-      });
-      expect(first.status).toBe(204);
-
-      // Re-DELETE with the same (now-stale) token → 409 with the tombstone.
-      const staleAgain = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ifUpdatedAtMatches: created.comment.updatedAt }),
-      });
-      expect(staleAgain.status).toBe(409);
-      const conflictBody = (await staleAgain.json()) as { latest: { updatedAt: string } };
-      const postTombstoneUpdatedAt = conflictBody.latest.updatedAt;
-      expect(postTombstoneUpdatedAt).not.toBe(created.comment.updatedAt);
-
-      // Re-DELETE with the post-tombstone token → idempotent 204.
-      const second = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ifUpdatedAtMatches: postTombstoneUpdatedAt }),
-      });
-      expect(second.status).toBe(204);
+      expect(content.oldContent).toBeNull();
+      expect(content.newContent).toBe("staged\n");
     } finally {
       await closeServer(server);
     }
   });
 
-  it("rejects an add request that supplies an author field", async () => {
-    const fixture = createFixture();
-    const { workspaceId } = seedRepoAndWorkspace(fixture);
-    const { server } = createDaemonApp(fixture);
+  it("creates internal threads, supports agent replies with final resolve, reopen, and viewed files", async () => {
+    const fixture = createFixture(dirs);
+    const git = createReviewGitFixture(fixture.config.dataDir);
+    registerReviewCheckout(fixture, git.repoPath, { withPr: true });
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
-      const r = await fetch(`${baseUrl}/api/workspaces/${workspaceId}/review-comments`, {
+      const metadata = await getJson<ReviewDiffMetadata>(`${baseUrl}/api/checkouts/checkout_review/review-diff`);
+      const file = section(metadata, "staged")?.files.find((candidate) => candidate.path === "staged.txt");
+      expect(file).toBeTruthy();
+
+      const created = await postJson<{ thread: { id: string; status: string; replies: unknown[] } }>(
+        `${baseUrl}/api/checkouts/checkout_review/review-threads`,
+        {
+          bucket: file?.bucket,
+          path: file?.path,
+          oldPath: file?.oldPath,
+          anchorKind: "file",
+          body: "Please simplify this.",
+        },
+      );
+      expect(created.thread.status).toBe("open");
+      expect(created.thread.replies).toHaveLength(1);
+
+      const counted = await getJson<ReviewDiffMetadata>(`${baseUrl}/api/checkouts/checkout_review/review-diff`);
+      expect(section(counted, "staged")?.files.find((candidate) => candidate.path === "staged.txt")).toMatchObject({
+        threadCount: 1,
+        openThreadCount: 1,
+      });
+
+      const replied = await postJson<{ thread: { status: string; replies: unknown[] } }>(
+        `${baseUrl}/api/review-threads/${created.thread.id}/replies`,
+        { body: "Fixed this.", authorKind: "agent", authorLabel: "Implementation agent", resolve: true },
+      );
+      expect(replied.thread.status).toBe("resolved");
+      expect(replied.thread.replies).toHaveLength(2);
+
+      const defaultThreads = await getJson<{ threads: unknown[] }>(
+        `${baseUrl}/api/checkouts/checkout_review/review-threads`,
+      );
+      expect(defaultThreads.threads).toHaveLength(0);
+
+      const reopened = await postJson<{ thread: { status: string } }>(
+        `${baseUrl}/api/review-threads/${created.thread.id}/reopen`,
+        {},
+      );
+      expect(reopened.thread.status).toBe("open");
+
+      const viewedResponse = await fetch(`${baseUrl}/api/checkouts/checkout_review/review-viewed-files`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: "hi", author: "agent:rogue" }),
+        body: JSON.stringify({
+          fileId: file?.id,
+          bucket: file?.bucket,
+          path: file?.path,
+          oldPath: file?.oldPath,
+          diffIdentity: file?.id,
+          viewed: true,
+        }),
       });
-      expect(r.status).toBe(400);
-    } finally {
-      await closeServer(server);
-    }
-  });
-});
+      expect(viewedResponse.status).toBe(204);
 
-describe("review routes — request_review", () => {
-  it("returns no-hook when none configured", async () => {
-    const fixture = createFixture();
-    const { workspaceId } = seedRepoAndWorkspace(fixture);
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      const r = await fetch(`${baseUrl}/api/workspaces/${workspaceId}/review-requests`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      expect(r.status).toBe(400);
-      expect((await r.json()) as { error: string }).toEqual({ error: "no-hook" });
+      const withViewed = await getJson<ReviewDiffMetadata>(`${baseUrl}/api/checkouts/checkout_review/review-diff`);
+      expect(section(withViewed, "staged")?.files.find((candidate) => candidate.path === "staged.txt")?.viewed).toBe(
+        true,
+      );
     } finally {
       await closeServer(server);
     }
   });
 
-  it("returns parsed suggestions when the configured hook succeeds", async () => {
-    const fixture = createFixture();
-    const { workspaceId } = seedRepoAndWorkspace(fixture, {
-      hookCommand: "node",
-      hookArgs: [
-        "-e",
-        "process.stdout.write(JSON.stringify({suggestions:[{id:'s1',kind:'reviewer',label:'@alice'}]}))",
-      ],
+  it("blocks comments before a PR exists and binds an existing GitHub PR without draft creation", async () => {
+    const fixture = createFixture(dirs);
+    const git = createReviewGitFixture(fixture.config.dataDir);
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/owner/repo.git"], {
+      cwd: git.repoPath,
+      stdio: "pipe",
     });
-    const { server } = createDaemonApp(fixture);
+    fixture.config.providers.github.command = fakeGh(fixture.config.dataDir);
+    registerReviewCheckout(fixture, git.repoPath, { withPr: false });
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
-      const r = await fetch(`${baseUrl}/api/workspaces/${workspaceId}/review-requests`, {
+      const before = await fetch(`${baseUrl}/api/checkouts/checkout_review/review-threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ bucket: "against-base", path: "README.md", anchorKind: "file", body: "No PR yet." }),
       });
-      expect(r.status).toBe(200);
-      const body = (await r.json()) as { run: ReviewSuggestionRun; output: { suggestions: { id: string }[] } };
-      expect(body.output.suggestions[0]?.id).toBe("s1");
-      // GET latest matches
-      const latest = await getJson<{ run: ReviewSuggestionRun | null }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-suggestions`,
+      expect(before.status).toBe(409);
+      expect(await before.json()).toEqual({ error: "review_scope_required" });
+
+      const created = await postJson<{ ok: boolean; prUrl: string; reviewScope: { externalReviewNumber: number } }>(
+        `${baseUrl}/api/checkouts/checkout_review/pull-request`,
+        {},
       );
-      expect(latest.run?.status).toBe("succeeded");
+      expect(created).toMatchObject({
+        ok: true,
+        prUrl: "https://github.com/owner/repo/pull/77",
+        reviewScope: { externalReviewNumber: 77 },
+      });
+      expect(fixture.store.findWorkspaceCheckout("checkout_review")?.intendedPr).toMatchObject({
+        provider: "github",
+        number: 77,
+        url: "https://github.com/owner/repo/pull/77",
+      });
     } finally {
       await closeServer(server);
     }
   });
 });
 
-// --- helpers ---------------------------------------------------------------
-
-function createFixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-review-routes-"));
-  dirs.push(dir);
-  const configPath = path.join(dir, "citadel.config.json");
-  const config = loadConfig(configPath);
-  config.dataDir = dir;
-  config.databasePath = path.join(dir, "citadel.sqlite");
-  config.providers = {
-    github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
-  };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
-  const store = new SqliteStore(config.databasePath);
-  store.migrate();
-  return { config, configPath, store };
+function createReviewGitFixture(parent: string) {
+  const git = createGitFixtureWithRemote(parent);
+  execFileSync("git", ["checkout", "-b", "feature/review"], { cwd: git.repoPath, stdio: "pipe" });
+  fs.appendFileSync(path.join(git.repoPath, "README.md"), "committed\n");
+  execFileSync("git", ["add", "README.md"], { cwd: git.repoPath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "committed change"], { cwd: git.repoPath, stdio: "pipe" });
+  fs.writeFileSync(path.join(git.repoPath, "staged.txt"), "staged\n");
+  execFileSync("git", ["add", "staged.txt"], { cwd: git.repoPath, stdio: "pipe" });
+  fs.appendFileSync(path.join(git.repoPath, "README.md"), "unstaged\n");
+  fs.writeFileSync(path.join(git.repoPath, "loose.txt"), "loose\n");
+  return git;
 }
 
-function seedRepoAndWorkspace(
+function registerReviewCheckout(
   fixture: ReturnType<typeof createFixture>,
-  opts: { hookCommand?: string; hookArgs?: string[] } = {},
+  repoPath: string,
+  options: { withPr: boolean },
 ) {
-  const git = createGitRepo(fixture.config.dataDir);
   const now = new Date().toISOString();
-  const repoId = `repo_${Date.now().toString(36)}`;
-  const requestReviewHookIds: string[] = [];
-  if (opts.hookCommand) {
-    const hookId = `rev_${Date.now().toString(36)}`;
-    fixture.config.hooks = [
-      ...(fixture.config.hooks ?? []),
-      {
-        id: hookId,
-        kind: "command",
-        event: "workspace.requestReview",
-        command: opts.hookCommand,
-        args: opts.hookArgs ?? [],
-        blocking: true,
-      },
-    ];
-    requestReviewHookIds.push(hookId);
-  }
+  fixture.config.automations = {
+    fixCi: {
+      enabled: false,
+      runtimeId: "test-agent",
+      fallbackRuntimeId: null,
+      idleThresholdMs: 5 * 60 * 1000,
+      debounceMs: 30 * 60 * 1000,
+      intervalMs: 60 * 1000,
+    },
+  };
   fixture.store.insertRepo({
-    id: repoId,
-    name: "Repo",
-    rootPath: git.repoPath,
+    id: "repo_review",
+    name: "Review Repo",
+    rootPath: repoPath,
     defaultBranch: "main",
     defaultRemote: "origin",
     worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
     setupHookIds: [],
     teardownHookIds: [],
-    requestReviewHookIds,
-    providerIds: [],
+    requestReviewHookIds: [],
+    providerIds: ["github-gh"],
     deployHookCommand: null,
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
   });
-  const workspaceId = `ws_${Date.now().toString(36)}`;
   fixture.store.insertWorkspace({
-    id: workspaceId,
-    repoId,
-    name: "ws",
-    path: git.repoPath,
-    branch: "main",
+    id: "ws_review",
+    repoId: "repo_review",
+    name: "Review Workspace",
+    path: path.join(fixture.config.dataDir, "workspace"),
+    rootPath: path.join(fixture.config.dataDir, "workspace"),
+    mode: "structured",
+    branch: "home",
     baseBranch: "main",
     source: "scratch",
-    kind: "worktree",
+    kind: "root",
+    lifecyclePhase: "implementation",
+    parentIssue: null,
     prUrl: null,
     issueKey: null,
     issueTitle: null,
     issueUrl: null,
     slackThreadUrl: null,
-    section: "default",
+    section: "backlog",
     pinned: false,
     lifecycle: "ready",
     dirty: false,
@@ -286,49 +239,70 @@ function seedRepoAndWorkspace(
     updatedAt: now,
     archivedAt: null,
   });
-  return { repoId, workspaceId };
-}
-
-function createGitRepo(dir: string) {
-  const repoPath = path.join(dir, `repo-${Date.now().toString(36)}`);
-  fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
-  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
-  return { repoPath };
-}
-
-function listen(server: http.Server) {
-  return new Promise<string>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
+  fixture.store.insertWorkspaceCheckout({
+    id: "checkout_review",
+    workspaceId: "ws_review",
+    repoId: "repo_review",
+    name: "Review checkout",
+    path: repoPath,
+    branch: "feature/review",
+    baseBranch: "main",
+    issue: { provider: "jira", key: "ENG-1", url: null, title: "Linked issue title", status: null, fetchedAt: now },
+    intendedPr: options.withPr
+      ? {
+          provider: "github",
+          number: 42,
+          url: "https://github.com/owner/repo/pull/42",
+          headSha: null,
+          baseRef: "main",
+          fetchedAt: now,
+          checksGreen: null,
+          mergeStateStatus: null,
+          hasConflicts: null,
+        }
+      : null,
+    stackParentCheckoutId: null,
+    inferredPurpose: "implementation",
+    gateStatus: "review_required",
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
   });
 }
 
-function closeServer(server: http.Server) {
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+function section(metadata: ReviewDiffMetadata, bucket: string) {
+  return metadata.sections.find((candidate) => candidate.bucket === bucket);
 }
 
-async function getJson<T>(url: string) {
-  const response = await fetch(url);
-  expect(response.ok).toBe(true);
-  return response.json() as Promise<T>;
+function fakeGh(parent: string): string {
+  const command = path.join(parent, "fake-gh");
+  fs.writeFileSync(
+    command,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-} ${2:-}" == "pr list" ]]; then',
+      '  echo \'[{"number":77,"title":"Existing","url":"https://github.com/owner/repo/pull/77","state":"OPEN","headRefName":"feature/review","baseRefName":"main","headRefOid":"remote_head"}]\'',
+      "  exit 0",
+      "fi",
+      'echo unexpected gh args: "$@" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return command;
 }
 
-async function postJson<T>(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return response.json() as Promise<T>;
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }

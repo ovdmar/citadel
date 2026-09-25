@@ -40,12 +40,22 @@
   overflow: hidden;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 820px) {
   .scratchpad-modal {
     width: 100vw;
     height: 100vh;
     max-height: 100vh;
     border-radius: 0;
+  }
+
+  .scratchpad-drawer-header {
+    grid-template-columns: 1fr auto auto auto;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .scratchpad-drawer-status {
+    display: none;
   }
 }
 
@@ -115,7 +125,7 @@
 }
 
 .scratchpad-drawer-body {
-  flex: 1;
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: 1fr;
   overflow: hidden;
@@ -127,14 +137,17 @@
 }
 
 .scratchpad-drawer .scratchpad-blocks-pane {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
 .scratchpad-drawer .scratchpad-block-list {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -279,6 +292,10 @@
   margin-bottom: 8px;
 }
 
+.citadel-actions-list-header--inline {
+  margin-top: 8px;
+}
+
 .citadel-actions-rows {
   list-style: none;
   margin: 0;
@@ -353,14 +370,18 @@
 }
 
 .citadel-actions-editor-row input,
-.citadel-actions-editor-row textarea {
+.citadel-actions-editor-row textarea,
+.citadel-actions-editor-row select {
   font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--bg-panel, var(--panel));
   color: inherit;
+}
+
+.citadel-actions-editor-row textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .citadel-actions-editor-prompt textarea {
@@ -383,6 +404,37 @@
 .citadel-actions-error {
   font-size: 11px;
   color: var(--color-danger, #ef4444);
+}
+
+.agent-template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-template-actions .is-active {
+  border-color: var(--color-accent, currentColor);
+}
+
+.agent-template-launch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-template-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+@media (max-width: 780px) {
+  .citadel-actions-panel,
+  .agent-template-launch-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .scratchpad-drawer-refine,

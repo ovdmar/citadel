@@ -30,7 +30,6 @@ type DiagnosticsSnapshot = {
     worktree: boolean;
     tmuxSocket: string | null;
   };
-  ttydInventory: Array<{ key: string; port: number; pid: number; tmuxSession: string }>;
   tmuxLiveSessions: string[] | null;
   sessions: Array<{ id: string; tabId: string | null; status: string; tmuxSessionName: string | null }>;
   recentEvents: DiagnosticEvent[];
@@ -63,8 +62,8 @@ export function DebugPanel() {
     <div className="restore-panel">
       <p className="restore-panel__lead">
         Citadel writes a structured event log to <code>{snapshot?.logFile.path ?? ".citadel/diagnostics.jsonl"}</code>{" "}
-        covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. Download the bundle below and share it
-        when reporting "my sessions died" — it includes the JSONL trail, a state snapshot, and the last 30 minutes of{" "}
+        covering tmux lifecycle, status-monitor decisions, and boot-restore. Download the bundle below and share it when
+        reporting "my sessions died" — it includes the JSONL trail, a state snapshot, and the last 30 minutes of{" "}
         <code>citadel.service</code> journal.
       </p>
 
@@ -103,10 +102,6 @@ export function DebugPanel() {
             <div>
               <dt>Tmux socket</dt>
               <dd>{snapshot.daemon.tmuxSocket ?? "default"}</dd>
-            </div>
-            <div>
-              <dt>Live ttyds</dt>
-              <dd>{snapshot.ttydInventory.length}</dd>
             </div>
             <div>
               <dt>Live tmux sessions</dt>

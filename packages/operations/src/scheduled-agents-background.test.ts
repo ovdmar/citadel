@@ -10,7 +10,7 @@ import { ScheduledAgentRunner } from "./scheduled-agents.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("ScheduledAgentRunner (background runMode)", () => {
@@ -29,14 +29,14 @@ describe("ScheduledAgentRunner (background runMode)", () => {
       store,
       operations,
       dataDir: fixture.dir,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       killTmuxSession: (name) => killed.push(name),
     });
     const agent = runner.create({
       name: "Boot bg",
       cron: "* * * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "bg-boot",
     });
@@ -85,7 +85,7 @@ describe("ScheduledAgentRunner (background runMode)", () => {
       store,
       operations,
       dataDir: fixture.dir,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       createBackgroundSession: async () => {
         createCalled += 1;
         throw new Error("should not be called");
@@ -95,7 +95,7 @@ describe("ScheduledAgentRunner (background runMode)", () => {
       name: "BG bad cwd",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "bg-bad",
       runMode: "background",
@@ -123,7 +123,7 @@ describe("ScheduledAgentRunner (background runMode)", () => {
       store,
       operations,
       dataDir: fixture.dir,
-      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
       createBackgroundSession: async () => ({
         id: "bg_stub_1",
         scheduledAgentId: "sched_x",
@@ -140,7 +140,7 @@ describe("ScheduledAgentRunner (background runMode)", () => {
       name: "BG ok",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "bg-ok",
       runMode: "background",

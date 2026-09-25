@@ -19,6 +19,7 @@ export function namespaceFromRow(row: Record<string, unknown>): Namespace {
     id: asString(row, "id"),
     name: asString(row, "name"),
     color: row.color ? asString(row, "color") : null,
+    position: Number(row.position ?? 0),
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
     archivedAt: row.archived_at ? asString(row, "archived_at") : null,
@@ -27,8 +28,8 @@ export function namespaceFromRow(row: Record<string, unknown>): Namespace {
 
 export function listNamespaces(db: Database, includeArchived = false): Namespace[] {
   const sql = includeArchived
-    ? "SELECT * FROM namespaces ORDER BY name"
-    : "SELECT * FROM namespaces WHERE archived_at IS NULL ORDER BY name";
+    ? "SELECT * FROM namespaces ORDER BY position, name"
+    : "SELECT * FROM namespaces WHERE archived_at IS NULL ORDER BY position, name";
   return db
     .prepare(sql)
     .all()
@@ -49,12 +50,13 @@ export function findNamespaceByName(db: Database, name: string): Namespace | nul
 
 export function insertNamespace(db: Database, namespace: Namespace) {
   db.prepare(
-    `INSERT INTO namespaces (id, name, color, created_at, updated_at, archived_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO namespaces (id, name, color, position, created_at, updated_at, archived_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     namespace.id,
     namespace.name,
     namespace.color ?? null,
+    namespace.position,
     namespace.createdAt,
     namespace.updatedAt,
     namespace.archivedAt ?? null,
@@ -103,6 +105,24 @@ export function restoreNamespace(db: Database, id: string, patch: { color?: stri
     id,
   );
   return { ...existing, color, archivedAt: null, updatedAt: now };
+}
+
+export function reorderNamespaces(db: Database, namespaceIds: readonly string[]): Namespace[] {
+  const now = new Date().toISOString();
+  const update = db.prepare("UPDATE namespaces SET position = ?, updated_at = ? WHERE id = ?");
+  const activeIds = new Set(listNamespaces(db).map((namespace) => namespace.id));
+  db.prepare("BEGIN").run();
+  try {
+    for (const [index, id] of namespaceIds.entries()) {
+      if (!activeIds.has(id)) continue;
+      update.run((index + 1) * 1024, now, id);
+    }
+    db.prepare("COMMIT").run();
+  } catch (err) {
+    db.prepare("ROLLBACK").run();
+    throw err;
+  }
+  return listNamespaces(db);
 }
 
 export function setWorkspaceNamespace(db: Database, workspaceId: string, namespaceId: string | null): boolean {

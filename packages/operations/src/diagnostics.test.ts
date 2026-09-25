@@ -6,7 +6,7 @@ import { createDiagnosticsLogger, noopDiagnosticsLogger } from "./diagnostics.js
 
 const dirs: string[] = [];
 afterEach(() => {
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function tmp(): string {
@@ -31,7 +31,7 @@ describe("createDiagnosticsLogger", () => {
     const dataDir = tmp();
     const logger = createDiagnosticsLogger({ dataDir });
     logger.log("tmux", "kill", { tmuxSession: "citadel_x" });
-    logger.log("ttyd", "spawn", { key: "sess_1", port: 11001 });
+    logger.log("terminal", "attach", { key: "sess_1" });
     const text = fs.readFileSync(path.join(dataDir, "diagnostics.jsonl"), "utf8");
     const lines = text.trim().split("\n");
     expect(lines).toHaveLength(2);
@@ -40,8 +40,8 @@ describe("createDiagnosticsLogger", () => {
     expect(a.category).toBe("tmux");
     expect(a.event).toBe("kill");
     expect(a.data).toEqual({ tmuxSession: "citadel_x" });
-    expect(b.category).toBe("ttyd");
-    expect(b.data?.port).toBe(11001);
+    expect(b.category).toBe("terminal");
+    expect(b.data).toEqual({ key: "sess_1" });
     expect(typeof a.ts).toBe("string");
     expect(new Date(a.ts).toString()).not.toBe("Invalid Date");
   });

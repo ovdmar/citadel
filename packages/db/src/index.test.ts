@@ -2,19 +2,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SqliteStore } from "./index.js";
+import { CURRENT_SCHEMA_VERSION, SqliteStore } from "./index.js";
 
 const dirs: string[] = [];
+const stores: SqliteStore[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const store of stores.splice(0)) store.close();
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
+
+function openStore(_databasePath: string) {
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
+  return store;
+}
 
 describe("SqliteStore", () => {
   it("migrates and persists repo/workspace/session/activity records", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     store.insertRepo({
@@ -35,27 +43,16 @@ describe("SqliteStore", () => {
     });
 
     expect(store.listRepos()).toHaveLength(1);
-    expect(store.query("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-      { version: 5 },
-      { version: 6 },
-      { version: 7 },
-      { version: 8 },
-      { version: 9 },
-      { version: 10 },
-      { version: 11 },
-      { version: 12 },
-      { version: 13 },
-    ]);
+    const migrations = store.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
+    expect(migrations.map((row) => row.version)).toEqual(
+      Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1),
+    );
   });
 
-  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+  it("round-trips workspace_sessions.status_reason_at via updateSessionStatus", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "test.sqlite"));
+    const store = openStore(path.join(dir, "test.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_srr",
@@ -98,9 +95,10 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_srr",
+      kind: "agent",
       workspaceId: "ws_srr",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-26T00:00:00.000Z",
@@ -133,7 +131,7 @@ describe("SqliteStore", () => {
   it("round-trips workspace, session, operation, and activity state", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_test",
@@ -177,9 +175,10 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_test",
+      kind: "agent",
       workspaceId: "ws_test",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-17T00:02:00.000Z",
@@ -252,7 +251,46 @@ describe("SqliteStore", () => {
         dirty: true,
       },
     ]);
-    expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
+      { kind: "agent", runtime_id: "claude-code" },
+    ]);
+    expect(store.listSessions("ws_test")).toMatchObject([
+      {
+        id: "sess_test",
+        transport: "connected",
+      },
+    ]);
+    store.insertWorkspaceSession({
+      id: "sess_terminal",
+      kind: "terminal",
+      workspaceId: "ws_test",
+      runtimeId: null,
+      displayName: "Terminal",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: "2026-05-17T00:02:00.000Z",
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      terminalBackend: "pty-daemon",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+      ptyLastSeenAt: "2026-05-17T00:02:01.000Z",
+      createdAt: "2026-05-17T00:02:00.000Z",
+      updatedAt: "2026-05-17T00:02:00.000Z",
+    });
+    expect(store.listWorkspaceSessions("ws_test").find((s) => s.id === "sess_terminal")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+    });
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
     expect(store.listActivity("ws_test")).toMatchObject([
       { id: "evt_test", source: "system", hookOutput: { links: [{ label: "Preview" }] } },
@@ -269,7 +307,7 @@ describe("SqliteStore", () => {
   it("deleteWorkspace hard-removes the row and its sessions so the name slot can be reused", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_delete",
@@ -312,9 +350,10 @@ describe("SqliteStore", () => {
     store.insertWorkspace({ ...workspaceBase, id: "ws_delete", path: path.join(dir, "worktrees", "reusable") });
     store.insertSession({
       id: "sess_delete",
+      kind: "agent",
       workspaceId: "ws_delete",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: null,
@@ -341,7 +380,7 @@ describe("SqliteStore", () => {
   it("archives repositories and hides their active workspaces", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_remove",
@@ -399,7 +438,7 @@ describe("SqliteStore", () => {
   it("round-trips scheduled agents and writes the one-shot cron placeholder", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     const baseRepo = {
@@ -428,7 +467,7 @@ describe("SqliteStore", () => {
       cron: "0 9 * * *",
       runAt: null,
       repoId: "repo_sched",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new" as const,
       workspaceName: "recur",
@@ -507,7 +546,7 @@ describe("SqliteStore", () => {
   it("round-trips scheduled_agent_runs rows and the queue helpers", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_runs",
@@ -533,7 +572,7 @@ describe("SqliteStore", () => {
       cron: "* * * * *",
       runAt: null,
       repoId: "repo_runs",
-      runtimeId: "shell",
+      runtimeId: "codex",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "runs",
@@ -623,7 +662,7 @@ describe("SqliteStore", () => {
   it("round-trips background_sessions and filters by scheduledAgentId", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     const now = "2026-05-17T00:00:00.000Z";
@@ -670,7 +709,7 @@ describe("SqliteStore", () => {
   it("deleteScheduledAgentCascade removes runs + background_sessions in one transaction and returns the cleanup metadata", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_cascade",
@@ -696,7 +735,7 @@ describe("SqliteStore", () => {
       cron: "0 * * * *",
       runAt: null,
       repoId: "repo_cascade",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "casc",

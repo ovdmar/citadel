@@ -17,6 +17,18 @@ export function codexSessionsRoot(home: string = os.homedir()): string {
   return path.join(home, ".codex", "sessions");
 }
 
+function codexHomeSessionsRoot(codexHome: string): string {
+  return path.join(codexHome, "sessions");
+}
+
+function codexSessionRoots(input: { home?: string; codexHome?: string } = {}): string[] {
+  const roots = [
+    ...(input.codexHome ? [codexHomeSessionsRoot(input.codexHome)] : []),
+    codexSessionsRoot(input.home ?? os.homedir()),
+  ];
+  return [...new Set(roots)];
+}
+
 type CodexMeta = { id?: string; cwd?: string; timestamp?: string };
 
 type ParseResult = { meta: CodexMeta; prompts: RuntimeUserPrompt[] };
@@ -147,6 +159,7 @@ export async function discoverCodexSessionId(opts: {
   timeoutMs?: number;
   pollMs?: number;
   home?: string;
+  codexHome?: string;
 }): Promise<string | null> {
   const timeoutMs = opts.timeoutMs ?? 5000;
   const pollMs = opts.pollMs ?? 200;
@@ -159,6 +172,7 @@ export async function discoverCodexSessionId(opts: {
         workspacePath: opts.workspacePath,
         sessionStartedAt,
         ...(opts.home ? { home: opts.home } : {}),
+        ...(opts.codexHome ? { codexHome: opts.codexHome } : {}),
       });
       if (found) return found;
     } else {
@@ -166,6 +180,7 @@ export async function discoverCodexSessionId(opts: {
         workspacePath: opts.workspacePath,
         sessionStartedAt,
         ...(opts.home ? { home: opts.home } : {}),
+        ...(opts.codexHome ? { codexHome: opts.codexHome } : {}),
       });
       if (file) {
         const { meta } = parseCodexRollout(file);
@@ -187,12 +202,16 @@ export function extractCodexResumeSessionIdFromArgv(argv: string[]): string | nu
 export function discoverCodexSessionIdFromProcess(opts: {
   rootPid: number;
   home?: string;
+  codexHome?: string;
   workspacePath?: string;
   sessionStartedAt?: string;
 }): string | null {
   const pids = listProcessTree(opts.rootPid);
+  const rootInput: { home?: string; codexHome?: string } = {};
+  if (opts.home !== undefined) rootInput.home = opts.home;
+  if (opts.codexHome !== undefined) rootInput.codexHome = opts.codexHome;
   for (const pid of pids) {
-    for (const rollout of findOpenCodexRolloutsForPid(pid, opts.home)) {
+    for (const rollout of findOpenCodexRolloutsForPid(pid, rootInput)) {
       const { meta } = parseCodexRollout(rollout);
       if (!codexMetaMatchesSession(meta, opts)) continue;
       if (meta.id) return meta.id;
@@ -265,8 +284,8 @@ function codexMetaMatchesSession(
   return metaMs >= startMs - 60_000;
 }
 
-function findOpenCodexRolloutsForPid(pid: number, home?: string): string[] {
-  const root = codexSessionsRoot(home ?? os.homedir());
+function findOpenCodexRolloutsForPid(pid: number, input: { home?: string; codexHome?: string } = {}): string[] {
+  const roots = codexSessionRoots(input);
   const fdDir = `/proc/${pid}/fd`;
   let entries: string[];
   try {
@@ -278,7 +297,7 @@ function findOpenCodexRolloutsForPid(pid: number, home?: string): string[] {
   for (const entry of entries) {
     try {
       const target = fs.realpathSync(path.join(fdDir, entry));
-      if (!target.startsWith(`${root}${path.sep}`)) continue;
+      if (!roots.some((root) => target.startsWith(`${root}${path.sep}`))) continue;
       if (!target.endsWith(".jsonl")) continue;
       rollouts.push(target);
     } catch {}
@@ -287,22 +306,26 @@ function findOpenCodexRolloutsForPid(pid: number, home?: string): string[] {
 }
 
 export function findCodexRolloutForSession(input: GetUserPromptsInput): string | null {
-  const root = codexSessionsRoot(input.home ?? os.homedir());
   const startMs = Date.parse(input.sessionStartedAt);
   if (!Number.isFinite(startMs)) return null;
   let bestPath: string | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const candidate of listCandidateRollouts(root, startMs)) {
-    const { meta } = parseCodexRollout(candidate);
-    if (!meta.cwd || meta.cwd !== input.workspacePath) continue;
-    const metaMs = meta.timestamp ? Date.parse(meta.timestamp) : Number.POSITIVE_INFINITY;
-    if (!Number.isFinite(metaMs)) continue;
-    const delta = metaMs - startMs;
-    if (delta < -60_000) continue;
-    const score = Math.abs(delta);
-    if (score < bestScore) {
-      bestScore = score;
-      bestPath = candidate;
+  const rootInput: { home?: string; codexHome?: string } = {};
+  if (input.home !== undefined) rootInput.home = input.home;
+  if (input.codexHome !== undefined) rootInput.codexHome = input.codexHome;
+  for (const root of codexSessionRoots(rootInput)) {
+    for (const candidate of listCandidateRollouts(root, startMs)) {
+      const { meta } = parseCodexRollout(candidate);
+      if (!meta.cwd || meta.cwd !== input.workspacePath) continue;
+      const metaMs = meta.timestamp ? Date.parse(meta.timestamp) : Number.POSITIVE_INFINITY;
+      if (!Number.isFinite(metaMs)) continue;
+      const delta = metaMs - startMs;
+      if (delta < -60_000) continue;
+      const score = Math.abs(delta);
+      if (score < bestScore) {
+        bestScore = score;
+        bestPath = candidate;
+      }
     }
   }
   return bestPath;

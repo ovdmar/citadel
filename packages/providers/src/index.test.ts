@@ -8,7 +8,6 @@ import {
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
-  collectJiraIssueSummary,
   collectProviderHealth,
   collectRuntimeUsage,
   commandHealth,
@@ -22,16 +21,13 @@ import {
   normalizePrCommit,
   normalizeRuntimeUsage,
   pLimit,
-  parseJiraIssueOutput,
-  parseJiraTransitionsOutput,
   setGithubCommand,
-  transitionJiraIssue,
 } from "./index.js";
 
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   setGithubCommand(undefined);
 });
 
@@ -233,44 +229,6 @@ describe("commandHealth", () => {
     );
     expect(reviewers).toHaveLength(1);
     expect(reviewers[0]).toEqual({ login: "needs-name", name: "Backfilled", state: "pending" });
-  });
-
-  it("parses Jira issue details and workflow transitions", () => {
-    expect(
-      parseJiraIssueOutput(
-        "Key: MS-496\nSummary: Citadel: prepare and run v2 headless implementation campaign\nStatus: To Do\nAssignee: Unassigned\nUpdated: 2026-05-17\n",
-      ),
-    ).toEqual({
-      key: "MS-496",
-      summary: "Citadel: prepare and run v2 headless implementation campaign",
-      issueStatus: "To Do",
-      assignee: "Unassigned",
-      updated: "2026-05-17",
-    });
-    expect(
-      parseJiraTransitionsOutput("ID | NAME | TO_STATUS\n21 | In Progress | In Progress\n31 | Done | Done\n"),
-    ).toEqual([
-      { id: "21", name: "In Progress", toStatus: "In Progress" },
-      { id: "31", name: "Done", toStatus: "Done" },
-    ]);
-  });
-
-  it("returns degraded Jira summaries when issue lookup fails", async () => {
-    const summary = await collectJiraIssueSummary("not-a-real-issue-key");
-
-    expect(summary.providerId).toBe("jira-jtk");
-    expect(summary.status).toBe("degraded");
-    expect(summary.key).toBe("NOT-A-REAL-ISSUE-KEY");
-    expect(summary.transitions).toEqual([]);
-  });
-
-  it("returns degraded Jira transition results when transition fails", async () => {
-    const result = await transitionJiraIssue({ issueKey: "not-a-real-issue-key", transition: "31" });
-
-    expect(result.providerId).toBe("jira-jtk");
-    expect(result.status).toBe("degraded");
-    expect(result.key).toBe("NOT-A-REAL-ISSUE-KEY");
-    expect(result.transition).toBe("31");
   });
 
   it("normalizes runtime usage emitted by an external provider command", () => {

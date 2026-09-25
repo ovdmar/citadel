@@ -26,6 +26,7 @@ export function discoverDefaultBranch(rootPath: string) {
     const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
       cwd: rootPath,
       encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
     })
       .trim()
       .replace("refs/remotes/origin/", "");
@@ -122,6 +123,11 @@ export function isUniqueWorkspaceNameViolation(error: unknown) {
   return /UNIQUE constraint failed: workspaces\.repo_id, workspaces\.name/i.test(error.message);
 }
 
+export function isUniqueWorkspacePathViolation(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /UNIQUE constraint failed: workspaces\.path/i.test(error.message);
+}
+
 export type WorktreeAddResult = { mode: "checkout" | "tracking" | "new-from-base"; startPoint?: string };
 
 // Attach a worktree at workspacePath. existingBranch (when set) is preferred:
@@ -164,6 +170,18 @@ export function remoteBranchExists(cwd: string, remote: string, branch: string) 
     return true;
   } catch {
     return false;
+  }
+}
+
+export function branchRefExists(cwd: string, remote: string, branch: string) {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return remoteBranchExists(cwd, remote, branch);
   }
 }
 
@@ -270,9 +288,9 @@ export function workspaceDirtySummary(workspacePath: string): WorkspaceDirtySumm
     }
     for (const line of logOutput.split("\n")) {
       if (!line) continue;
-      const [sha, ...subjectParts] = line.split(" ");
+      const [sha, ...subjectParts] = line.split("\0");
       if (!sha) continue;
-      unpushedCommits.push({ sha, subject: subjectParts.join(" ") });
+      unpushedCommits.push({ sha, subject: subjectParts.join("\0") });
       if (unpushedCommits.length >= DIRTY_SUMMARY_COMMIT_CAP) break;
     }
   } catch {
@@ -372,7 +390,7 @@ export function reconcileStore(
   for (const session of store.listSessions()) {
     if (!session.tmuxSessionName) continue;
     if (["stopped", "failed", "unknown"].includes(session.status)) continue;
-    if (!tmuxSessionExists(session.tmuxSessionName)) {
+    if (!tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
       const workspaceExists = store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
       if (!workspaceExists) {
         store.deleteSession(session.id);
@@ -403,7 +421,7 @@ export function reconcileStore(
     // For background sessions and the legacy raw-spawn path, the pane PID is
     // the command itself; absence of a shell foreground means the command
     // is still running → leave the row alone.
-    const pane = panePidProcess(session.tmuxSessionName);
+    const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
     if (pane === null) {
       // tmux missing → handled by the workspace-membership branch above.
       // We re-checked here just to be paranoid; status-monitor's next tick

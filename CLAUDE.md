@@ -27,3 +27,17 @@ See `docs/operations/worktree-development.md` for the full model.
 - Do not invoke `pkill -f node` or anything that could take down the user's systemd daemon.
 - Do not edit files under `/home/jonsnow/Workspace/citadel/` (the main checkout the systemd unit may point at) from this worktree.
 - When asked to "redeploy" / "restart", run `make deploy` (it stops the previous stack and starts fresh).
+
+## Repo hook files
+
+Hooks tracked in the repo live under `.citadel/hooks/`:
+
+- `.citadel/hooks/deploy` — the special-case deploy hook (a file). Implements the `list`/`redeploy` subcommand contract; see `packages/hooks/src/deploy.ts`. Untouched by the event-folder discovery below.
+- `.citadel/hooks/<event>/<name>.sh` — a bash hook that fires on the named event. Must be executable; receives JSON payload on stdin; stdout parsed as structured `HookOutput`.
+- `.citadel/hooks/<event>/<name>.agent` or `.prompt` — an agent-prompt hook. Optional `---`-fenced frontmatter (`runtime`, `displayName`); body is `{{a.b.c}}`-templated against the payload, then sent as the seed prompt to a fresh agent session. Agent-prompt hooks are NOT allowed under `agent.started/` (would loop). `model`/`target`/`blocking` are reserved frontmatter keys (strict-mode rejected) — pending end-to-end plumbing.
+
+Per-event ordering: config-defined hooks run first (in the order listed in `repoDefaults.*HookIds`), then file hooks (lexicographic by filename). Multiple file hooks per event are fine; use a numeric prefix (`10-bootstrap.sh`, `20-notify.prompt`) to control order.
+
+**Security note:** files in `.citadel/hooks/` execute on every relevant event in every workspace. Review them in PRs like any other privileged code.
+
+If `.citadel/hooks/deploy` somehow becomes a directory rather than a file, the special-case deploy hook silently disables (`inspectHookFile` requires a file). Don't put event-folder hooks under a name that collides with the special-case file.

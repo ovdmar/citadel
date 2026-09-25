@@ -38,7 +38,7 @@ export type AutoRecoveryDecisionInput = {
     mergeable: string | null;
     checks: Array<{ status: string; conclusion: string | null }>;
   } | null;
-  // Whether the workspace has a non-shell runtime configured to receive the
+  // Whether the workspace has an agent runtime configured to receive the
   // auto-launch. When null we skip (no runtime to launch into).
   runtimeId: string | null;
   now: Date;
@@ -80,7 +80,7 @@ export function decideAutoRecoveryAction(input: AutoRecoveryDecisionInput): Auto
   if (!failingCheck) return { fire: false, reason: "ci_not_failing", sha: input.pr.headSha };
 
   const activeSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
+    (session) => session.runtimeId !== null && ["starting", "running"].includes(session.status),
   );
   if (activeSession) return { fire: false, reason: "agent_session_active", sha: input.pr.headSha };
 

@@ -122,7 +122,7 @@ export const SCRATCHPAD_TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: "refine_scratchpad",
     description:
-      "Launch an agent in a fresh workspace to refine (deduplicate, group, tidy) the scratchpad. Uses the user's saved 'refine-scratchpad' Citadel Action prompt by default; override with `prompt` for this run only. Pass `repoId` or `repoName` to pick the host repo (defaults to the most-recently-active repo on the daemon). Returns the discriminated union { ok: true, workspaceId, sessionId, warning? } | { ok: false, error: 'runtime_unavailable'|'repo_required'|'launch_failed', detail, workspaceId? }. The agent is expected to skip blocks tagged `in-progress`; if the resolved prompt omits that substring the response includes a soft `warning` field.",
+      "Launch an agent in a fresh workspace to refine (deduplicate, group, tidy) the scratchpad. Uses the user's saved 'refine-scratchpad' Citadel Action prompt and preferred runtime by default; override with `prompt` for this run only. If the preferred runtime is unavailable, Citadel falls back to the next configured non-shell agent runtime. Pass `repoId` or `repoName` to pick the host repo (defaults to the most-recently-active repo on the daemon). Returns the discriminated union { ok: true, workspaceId, sessionId, warning? } | { ok: false, error: 'runtime_unavailable'|'repo_required'|'launch_failed', detail, workspaceId? }. The agent is expected to skip blocks tagged `in-progress`; if the resolved prompt omits that substring the response includes a soft `warning` field.",
     inputSchema: {
       type: "object",
       properties: {

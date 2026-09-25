@@ -170,8 +170,22 @@
   letter-spacing: 0.02em;
 }
 
-[data-theme="dark"] .cit-jira-key {
+[data-theme="dark"] .cit-jira-key,
+[data-cit-on-dark="true"] .cit-jira-key {
   color: oklch(75% 0.13 250);
+}
+
+/* On any deliberately-dark surface (e.g. an active workspace card or a
+ * dark-themed inspector pane) the chip itself needs to flip background,
+ * border, and the title color so it doesn't disappear into the surface.
+ * Status pill overrides below mirror the dark-theme variants. */
+[data-cit-on-dark="true"] .cit-jira {
+  background: var(--c-dark-2);
+  border-color: color-mix(in srgb, var(--c-on-dark) 14%, transparent);
+  color: var(--c-on-dark);
+}
+[data-cit-on-dark="true"] .cit-jira-title {
+  color: var(--c-on-dark);
 }
 
 .cit-jira-title {
@@ -221,19 +235,23 @@
   background: oklch(85% 0.1 25 / 0.45);
   color: oklch(45% 0.16 25);
 }
-[data-theme="dark"] .cit-jira-status--progress {
+[data-theme="dark"] .cit-jira-status--progress,
+[data-cit-on-dark="true"] .cit-jira-status--progress {
   background: oklch(40% 0.1 70 / 0.4);
   color: oklch(82% 0.13 70);
 }
-[data-theme="dark"] .cit-jira-status--review {
+[data-theme="dark"] .cit-jira-status--review,
+[data-cit-on-dark="true"] .cit-jira-status--review {
   background: oklch(40% 0.1 250 / 0.45);
   color: oklch(82% 0.14 250);
 }
-[data-theme="dark"] .cit-jira-status--done {
+[data-theme="dark"] .cit-jira-status--done,
+[data-cit-on-dark="true"] .cit-jira-status--done {
   background: oklch(40% 0.1 145 / 0.4);
   color: oklch(80% 0.13 145);
 }
-[data-theme="dark"] .cit-jira-status--blocked {
+[data-theme="dark"] .cit-jira-status--blocked,
+[data-cit-on-dark="true"] .cit-jira-status--blocked {
   background: oklch(40% 0.1 25 / 0.4);
   color: oklch(80% 0.16 25);
 }
