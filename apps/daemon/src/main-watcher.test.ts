@@ -36,6 +36,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
     worktreeParent: "/nonexistent/wt",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: "2026-05-26T00:00:00.000Z",

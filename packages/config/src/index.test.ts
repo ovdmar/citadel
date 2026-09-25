@@ -224,7 +224,7 @@ describe("loadConfig", () => {
       automations: { fixCi: { enabled: true, runtimeId: "codex", fallbackRuntimeId: "cursor-agent" } },
       agentSessions: { baseSystemPrompt: "Use Citadel tools." },
       hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
-      repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [], requestReviewHookIds: [] },
     });
     saveConfig(next, configPath);
 

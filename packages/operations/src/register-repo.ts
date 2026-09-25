@@ -11,6 +11,7 @@ export type RegisterRepoDeps = {
   repoDefaults?: {
     setupHookIds: string[];
     teardownHookIds: string[];
+    requestReviewHookIds?: string[];
   };
   activity: (
     type: string,
@@ -40,6 +41,7 @@ export function registerRepo(
     showMainWorkspace: false,
     setupHookIds: deps.repoDefaults?.setupHookIds ?? [],
     teardownHookIds: deps.repoDefaults?.teardownHookIds ?? [],
+    requestReviewHookIds: deps.repoDefaults?.requestReviewHookIds ?? [],
     providerIds: ["github-gh", "jira-jtk"],
     deployHookCommand: null,
     createdAt: now,

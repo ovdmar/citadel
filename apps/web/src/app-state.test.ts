@@ -49,6 +49,7 @@ function repo(overrides: Partial<Repo> = {}): Repo {
     showMainWorkspace: false,
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: "2026-05-25T12:00:00.000Z",

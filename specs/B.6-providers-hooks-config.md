@@ -84,12 +84,13 @@ Issue-tracker providers may declare auto-transitions that fire on lifecycle even
 [~] 3. Teardown hooks can be configured per repo (`repo.teardownHookIds`) and/or shipped as an executable `.citadel/hooks/teardown`; when both are present, the file hook runs first, then the configured hooks (this is dual execution, not dual-discovery-with-fallback as deploy uses).
 [~] 4. App/link discovery hooks are configured per repo; `.citadel/hooks/deploy` lists and redeploys apps, while optional `.citadel/hooks/undeploy` stops a named app or all apps.
 [ ] 5. Action hooks are configured per repo.
-[ ] 6. Hooks receive structured workspace/repo/provider context — payload shape is event-specific and validated before dispatch.
+[~] 6. Hooks receive structured workspace/repo/provider context — payload shape is event-specific and validated before dispatch. `workspace.requestReview` receives workspace/repo/PR context plus a bounded diff summary and returns `ReviewSuggestionsOutput`.
 [ ] 7. Hooks return structured JSON.
 [ ] 8. Hook output is validated before it appears in the UI.
 [ ] 9. Hook execution has explicit cwd/env policy, timeout, output bounds, and logs. For `.agent` / `.prompt` hooks, the unit of execution is an agent session launch — the framework awaits session creation (including initial prompt delivery) but does not block on subsequent session output.
 [ ] 10. Hook diagnostics show configured hooks, last run, validation status, sample output shape, and errors.
 [ ] 11. Hooks may be implemented as agent prompts (`.agent` or `.prompt` files). Agent hooks spawn a fresh isolated agent session in the workspace with the file body as the seed prompt; the session runs to completion independently and logs its own activity. Agent-prompt hooks are not allowed under `agent.started/` to prevent infinite session-spawn loops.
+[~] 12. Repositories can bind `workspace.requestReview` hooks through `requestReviewHookIds`; authored hooks for this event default to blocking and invalid references are rejected at config load.
 
 ## Config And Settings
 

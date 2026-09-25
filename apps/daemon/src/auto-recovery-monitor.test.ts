@@ -33,6 +33,7 @@ function seedRepoAndWorkspace(store: SqliteStore, workspaceId = "ws_test") {
     worktreeParent: "/tmp/fake/wt",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: ["github-gh"],
     deployHookCommand: null,
     createdAt: now,

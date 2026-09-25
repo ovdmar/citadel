@@ -93,6 +93,7 @@ function makeRepo(rootPath: string): Repo {
     worktreeParent: path.join(rootPath, "..", "worktrees"),
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: ["github-gh"],
     deployHookCommand: null,
     createdAt: "2026-05-01T00:00:00.000Z",

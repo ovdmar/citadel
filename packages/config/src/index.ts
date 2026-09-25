@@ -111,7 +111,8 @@ export const HookConfigSchema = z
   })
   .transform((hook) => ({
     ...hook,
-    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown", "pr.merge"].includes(hook.event),
+    blocking:
+      hook.blocking ?? ["workspace.setup", "workspace.teardown", "workspace.requestReview", "pr.merge"].includes(hook.event),
   }));
 
 export const CitadelConfigSchema = z
@@ -180,10 +181,11 @@ export const CitadelConfigSchema = z
       .object({
         setupHookIds: z.array(z.string()).default([]),
         teardownHookIds: z.array(z.string()).default([]),
+        requestReviewHookIds: z.array(z.string()).default([]),
         appHookIds: z.array(z.string()).default([]),
         actionHookIds: z.array(z.string()).default([]),
       })
-      .default({ setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] }),
+      .default({ setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [], appHookIds: [], actionHookIds: [] }),
     commandPolicy: z
       .object({
         hookTimeoutMs: z.number().int().min(1000).default(120000),
@@ -231,6 +233,10 @@ export const CitadelConfigSchema = z
     validateHookReferences(context, hooksById, config.repoDefaults.teardownHookIds, "workspace.teardown", [
       "repoDefaults",
       "teardownHookIds",
+    ]);
+    validateHookReferences(context, hooksById, config.repoDefaults.requestReviewHookIds, "workspace.requestReview", [
+      "repoDefaults",
+      "requestReviewHookIds",
     ]);
     validateHookReferences(context, hooksById, config.repoDefaults.appHookIds, "workspace.apps", [
       "repoDefaults",

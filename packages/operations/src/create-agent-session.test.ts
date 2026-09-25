@@ -496,7 +496,7 @@ function makeService(
   return new OperationService(store, {
     ...(dataDir ? { dataDir } : {}),
     hooks: [],
-    repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+    repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
     commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     ...overrides,
   });

@@ -111,6 +111,7 @@
 [ ] 7. Agents can list, create, reply to, resolve, and reopen internal review threads through MCP using checkout/review-scope targets and file/line anchors from their local code context. MCP does not expose diff content.
 [ ] 8. Open/current internal review threads contribute to the selected checkout gate as `review_blocked`, below conflicts, check failures, and stale provider facts. Resolved and outdated threads never block readiness.
 [ ] 9. Internal review data is stored in first-class SQLite tables. Merged PR scopes are hard-deleted only after a fresh merged provider observation; closed-unmerged scopes are pruned after a short grace window; stale, unavailable, rate-limited, or misconfigured provider states never delete review data.
+[~] 10. The inspector also exposes a lightweight workspace/PR Review tab for Citadel-native flat comments and repo-configured review suggestions. These comments are stored in Citadel SQLite (`review_comments`) rather than posted to GitHub, and are readable/mutable by agents through MCP.
 
 ---
 

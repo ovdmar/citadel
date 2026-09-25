@@ -56,6 +56,7 @@ export const RepoSchema = z.object({
   showMainWorkspace: z.boolean().optional(),
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
+  requestReviewHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),
   deployHookCommand: z.string().max(4000).nullable().default(null),
   createdAt: z.string(),
@@ -727,3 +728,4 @@ export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspa
 export * from "./agents-system.js";
 export * from "./manager-orchestration.js";
 export * from "./internal-review.js";
+export * from "./review.js";

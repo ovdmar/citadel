@@ -713,6 +713,16 @@ Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
 import { repoStoreMethods } from "./repo-store.js";
 Object.assign(SqliteStore.prototype, repoStoreMethods);
 
+import { reviewStoreMethods } from "./review.js";
+Object.assign(SqliteStore.prototype, reviewStoreMethods);
+export type {
+  InsertReviewCommentInput,
+  InsertReviewSuggestionRunInput,
+  ListReviewCommentsOptions,
+  ReviewCommentMutationResult,
+  ReviewCommentPatch,
+} from "./review.js";
+
 // Attach the scheduled_agent_runs and background_sessions methods to
 // SqliteStore.prototype. The implementations live in scheduled-run-store.ts
 // (kept separate to stay under the per-file line budget); the type

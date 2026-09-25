@@ -68,6 +68,7 @@ import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit 
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
+export * from "./review-system.js";
 import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
 import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
@@ -126,6 +127,7 @@ export class OperationService {
       repoDefaults: {
         setupHookIds: string[];
         teardownHookIds: string[];
+        requestReviewHookIds?: string[];
         appHookIds?: string[];
         actionHookIds?: string[];
       };
@@ -623,6 +625,7 @@ export class OperationService {
       hooks: this.config?.hooks ?? [],
       appHookIds: this.config?.repoDefaults.appHookIds ?? [],
       actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
+      requestReviewHookIds: repo.requestReviewHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
 

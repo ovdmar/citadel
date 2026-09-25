@@ -4,24 +4,66 @@ import {
   MarkReviewFileViewedInputSchema,
   ReplyReviewThreadInputSchema,
   type ReviewActionWarning,
+  type ReviewSuggestionRun,
   type ReviewDiffFileSummary,
   type ReviewDiffMetadata,
+  type Workspace,
 } from "@citadel/contracts";
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import {
+  addReviewComment as addReviewCommentImpl,
+  deleteReviewComment as deleteReviewCommentImpl,
+  listReviewComments as listReviewCommentsImpl,
+  requestReviewForWorkspace,
+  updateReviewComment as updateReviewCommentImpl,
+} from "@citadel/operations";
 import { createGitHubPullRequest, pushGitHubBranch } from "@citadel/providers";
 import type express from "express";
+import { z } from "zod";
 import {
   readReviewDiffFileContent,
   readReviewDiffMetadata,
   resolveReviewCheckout,
   upsertReviewScopeForCheckout,
 } from "./review-diff.js";
+import { readWorkspaceDiffSummary } from "./workspace-diff.js";
 
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
 type AsyncRoute = (
   handler: AsyncHandler,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
+
+const StatusQuerySchema = z.enum(["open", "resolved", "all"]).default("all");
+
+const AddCommentBodySchema = z
+  .object({
+    body: z.string().min(1).max(8000),
+    filePath: z.string().min(1).max(512).nullable().optional(),
+    lineStart: z.number().int().min(1).nullable().optional(),
+    lineEnd: z.number().int().min(1).nullable().optional(),
+    side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.lineEnd != null && value.lineStart != null && value.lineEnd < value.lineStart) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["lineEnd"], message: "lineEnd must be >= lineStart" });
+    }
+    if ((value.lineStart != null || value.lineEnd != null || value.side != null) && !value.filePath) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["filePath"], message: "anchor requires filePath" });
+    }
+  });
+
+const UpdateCommentBodySchema = z
+  .object({
+    body: z.string().min(1).max(8000).optional(),
+    status: z.enum(["open", "resolved"]).optional(),
+    ifUpdatedAtMatches: z.string().min(1),
+  })
+  .strict()
+  .refine((value) => value.body !== undefined || value.status !== undefined, "empty_patch");
+
+const DeleteCommentBodySchema = z.object({ ifUpdatedAtMatches: z.string().min(1) }).strict();
 
 export function registerReviewRoutes(input: {
   app: express.Express;
@@ -31,6 +73,27 @@ export function registerReviewRoutes(input: {
   emit: (type: string, payload: unknown) => void;
 }) {
   const { app, store, config, asyncRoute, emit } = input;
+  const activity = (
+    type: string,
+    source: "user" | "system" | "hook",
+    message: string,
+    repoId: string | null,
+    workspaceId: string | null,
+  ) =>
+    store.addActivity({
+      id: createId("evt"),
+      type,
+      source,
+      repoId,
+      workspaceId,
+      operationId: null,
+      message,
+      hookOutput: null,
+      createdAt: new Date().toISOString(),
+    });
+
+  const resolveWorkspace = (workspaceId: string): Workspace | null =>
+    store.listWorkspaces().find((workspace) => workspace.id === workspaceId) ?? null;
 
   app.get(
     "/api/checkouts/:checkoutId/review-diff",
@@ -262,6 +325,131 @@ export function registerReviewRoutes(input: {
         warnings: result.warnings.map(reviewWarning),
         error: result.error,
       });
+    }),
+  );
+
+  app.get(
+    "/api/workspaces/:workspaceId/review-comments",
+    asyncRoute(async (req, res) => {
+      const workspaceId = String(req.params.workspaceId);
+      if (!resolveWorkspace(workspaceId)) return res.status(404).json({ error: "workspace_not_found" });
+      const statusParse = StatusQuerySchema.safeParse(req.query.status ?? "all");
+      if (!statusParse.success) return res.status(400).json({ error: "invalid_status" });
+      const comments = listReviewCommentsImpl({
+        store,
+        workspaceId,
+        status: statusParse.data,
+        includeDeleted: req.query.includeDeleted === "true",
+      });
+      res.json({ comments });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/review-comments",
+    asyncRoute(async (req, res) => {
+      const workspaceId = String(req.params.workspaceId);
+      const workspace = resolveWorkspace(workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const parsed = AddCommentBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_body", detail: parsed.error.message });
+      const comment = addReviewCommentImpl({
+        store,
+        activity,
+        workspaceId,
+        body: parsed.data.body,
+        author: "operator",
+        repoId: workspace.repoId ?? "",
+        filePath: parsed.data.filePath ?? null,
+        lineStart: parsed.data.lineStart ?? null,
+        lineEnd: parsed.data.lineEnd ?? null,
+        side: parsed.data.side ?? null,
+      });
+      res.status(201).json({ comment });
+    }),
+  );
+
+  app.patch(
+    "/api/review-comments/:commentId",
+    asyncRoute(async (req, res) => {
+      const commentId = String(req.params.commentId);
+      const parsed = UpdateCommentBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_body", detail: parsed.error.message });
+      const existing = store.getReviewComment(commentId);
+      if (!existing || existing.deletedAt) return res.status(404).json({ error: "comment_not_found" });
+      const workspace = resolveWorkspace(existing.workspaceId);
+      const updateInput: Parameters<typeof updateReviewCommentImpl>[0] = {
+        store,
+        activity,
+        id: commentId,
+        ifUpdatedAtMatches: parsed.data.ifUpdatedAtMatches,
+        repoId: workspace?.repoId ?? "",
+      };
+      if (parsed.data.body !== undefined) updateInput.body = parsed.data.body;
+      if (parsed.data.status !== undefined) updateInput.status = parsed.data.status;
+      const result = updateReviewCommentImpl(updateInput);
+      if (result.kind === "not-found") return res.status(404).json({ error: "comment_not_found" });
+      if (result.kind === "conflict") return res.status(409).json({ error: "conflict", latest: result.latest });
+      return res.json({ comment: result.row });
+    }),
+  );
+
+  app.delete(
+    "/api/review-comments/:commentId",
+    asyncRoute(async (req, res) => {
+      const commentId = String(req.params.commentId);
+      const parsed = DeleteCommentBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "invalid_body", detail: parsed.error.message });
+      const existing = store.getReviewComment(commentId);
+      if (!existing) return res.status(404).json({ error: "comment_not_found" });
+      if (existing.deletedAt) {
+        if (existing.updatedAt === parsed.data.ifUpdatedAtMatches) return res.status(204).end();
+        return res.status(409).json({ error: "conflict", latest: existing });
+      }
+      const workspace = resolveWorkspace(existing.workspaceId);
+      const result = deleteReviewCommentImpl({
+        store,
+        activity,
+        id: commentId,
+        ifUpdatedAtMatches: parsed.data.ifUpdatedAtMatches,
+        repoId: workspace?.repoId ?? "",
+      });
+      if (result.kind === "not-found") return res.status(404).json({ error: "comment_not_found" });
+      if (result.kind === "conflict") return res.status(409).json({ error: "conflict", latest: result.latest });
+      return res.status(204).end();
+    }),
+  );
+
+  app.get(
+    "/api/workspaces/:workspaceId/review-suggestions",
+    asyncRoute(async (req, res) => {
+      const workspaceId = String(req.params.workspaceId);
+      if (!resolveWorkspace(workspaceId)) return res.status(404).json({ error: "workspace_not_found" });
+      const run: ReviewSuggestionRun | null = store.latestReviewSuggestionRun(workspaceId);
+      res.json({ run });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/review-requests",
+    asyncRoute(async (req, res) => {
+      const workspaceId = String(req.params.workspaceId);
+      const workspace = resolveWorkspace(workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const result = await requestReviewForWorkspace({
+        store,
+        config: { hooks: config.hooks, commandPolicy: config.commandPolicy },
+        activity,
+        repo,
+        workspace,
+        diff: readWorkspaceDiffSummary(workspace.id, workspace.path),
+      });
+      if (result.kind === "no-hook") return res.status(400).json({ error: "no-hook" });
+      if (result.kind === "succeeded") return res.json({ run: result.run, output: result.output });
+      if (result.kind === "timed-out") return res.status(504).json({ error: "timed-out", run: result.run });
+      return res.status(502).json({ error: "hook-failed", run: result.run, message: result.error });
     }),
   );
 }

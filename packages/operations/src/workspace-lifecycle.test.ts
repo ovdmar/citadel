@@ -24,7 +24,7 @@ describe("workspace lifecycle", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -53,7 +53,7 @@ describe("workspace lifecycle", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -84,7 +84,7 @@ describe("workspace lifecycle", () => {
           blocking: true,
         },
       ],
-      repoDefaults: { setupHookIds: ["slow-setup"], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: ["slow-setup"], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -104,7 +104,7 @@ describe("workspace lifecycle", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -169,7 +169,7 @@ describe("workspace lifecycle", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -188,7 +188,7 @@ describe("workspace lifecycle", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });

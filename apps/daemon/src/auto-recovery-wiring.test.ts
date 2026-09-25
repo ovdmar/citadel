@@ -23,7 +23,13 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
     terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: { fixCi: { ...DEFAULT_FIX_CI_AUTOMATION, ...overrides } },
-    repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },
+    repoDefaults: {
+      setupHookIds: [],
+      teardownHookIds: [],
+      requestReviewHookIds: [],
+      appHookIds: [],
+      actionHookIds: [],
+    },
     hooks: [],
     commandPolicy: { hookTimeoutMs: 120_000, allowDestructiveWorkspaceCleanup: false },
     providerRefresh: {

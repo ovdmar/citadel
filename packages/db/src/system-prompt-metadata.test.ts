@@ -24,6 +24,7 @@ function makeStore(): SqliteStore {
     worktreeParent: path.join(dir, "worktrees"),
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: "2026-05-17T00:00:00.000Z",

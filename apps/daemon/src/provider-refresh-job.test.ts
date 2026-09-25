@@ -79,6 +79,7 @@ function makeRepo(id = "repo", overrides: Partial<Repo> = {}): Repo {
     worktreeParent: `/tmp/${id}/worktrees`,
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: ["github-gh"],
     deployHookCommand: null,
     createdAt: "2026-05-25T00:00:00Z",

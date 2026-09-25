@@ -41,7 +41,7 @@ function config(): CitadelConfig {
       },
     },
     hooks: [],
-    repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },
+    repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [], appHookIds: [], actionHookIds: [] },
     commandPolicy: { hookTimeoutMs: 120_000, allowDestructiveWorkspaceCleanup: false },
     providerRefresh: {
       enabled: true,
@@ -92,6 +92,7 @@ function repo(over: Partial<Repo> = {}): Repo {
     worktreeParent: "/worktrees",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: NOW.toISOString(),

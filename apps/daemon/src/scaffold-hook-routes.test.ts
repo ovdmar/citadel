@@ -16,6 +16,7 @@ function fakeRepo(overrides: Record<string, unknown> = {}) {
     worktreeParent: "/abs/path",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: new Date().toISOString(),

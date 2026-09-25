@@ -37,6 +37,7 @@ function fixture() {
     worktreeParent: "/tmp/fake-worktrees",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: new Date().toISOString(),

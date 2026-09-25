@@ -14,13 +14,14 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
 import { InspectorPrSection } from "./inspector-pr.js";
+import { ReviewTab } from "./inspector-review.js";
 import { aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { IssueAttachSlot } from "./jira-picker.js";
 
 // Re-export so existing consumers (incl. inspector.test.ts) keep working.
 export { aggregateReviewerCounts } from "./inspector-reviewers.js";
 
-type InspectorTab = "stats" | "diff";
+type InspectorTab = "stats" | "diff" | "review";
 
 export function Inspector(props: {
   workspace: Workspace;
@@ -61,6 +62,14 @@ export function Inspector(props: {
           Diff
           {fileCount !== null && fileCount > 0 ? <span className="inspector-tab-count">{fileCount}</span> : null}
         </button>
+        <button
+          type="button"
+          className={`inspector-tab ${tab === "review" ? "active" : ""}`}
+          onClick={() => setTab("review")}
+          title="Request review and read citadel-native comments"
+        >
+          Review
+        </button>
         <span className="inspector-tab-indicator" data-tab={tab} aria-hidden />
         <button
           type="button"
@@ -85,12 +94,22 @@ export function Inspector(props: {
             targetBranch={props.targetBranch}
             targetBaseBranch={props.targetBaseBranch}
           />
-        ) : (
+        ) : tab === "diff" ? (
           <DiffTab
             workspace={props.workspace}
             summary={props.summary}
             diff={diff.data}
             reviewCheckoutId={props.reviewCheckoutId}
+          />
+        ) : (
+          <ReviewTab
+            workspace={props.workspace}
+            diff={diff.data}
+            hasRequestReviewHook={(props.repo?.requestReviewHookIds?.length ?? 0) > 0}
+            hasReviewableContext={
+              Boolean(props.workspace.prUrl) ||
+              (Boolean(props.repo) && props.workspace.branch !== props.repo?.defaultBranch)
+            }
           />
         )}
       </div>

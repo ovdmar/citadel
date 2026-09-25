@@ -216,6 +216,7 @@ exit 1
         worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
         setupHookIds: [],
         teardownHookIds: [],
+        requestReviewHookIds: [],
         providerIds: ["github-gh"],
         deployHookCommand: null,
         createdAt: now,

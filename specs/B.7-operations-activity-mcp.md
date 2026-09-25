@@ -60,7 +60,7 @@ Read-only:
   `inspect_readiness`, `read_agent_output`, `get_citadel_context`,
   `get_workspace_plan`, `get_checkout_ticket`, `get_checkout_pr`,
   `get_checkout_gate_status`, `list_workspace_checkouts`, `list_review_scopes`,
-  `list_review_threads`.
+  `list_review_threads`, `list_review_comments`.
 
 Daemon-mediated (run through the operation service so they obey the same hook, activity, and safety model as the UI):
 - `create_workspace`, `start_agent_session`, `send_agent_message`,
@@ -72,7 +72,9 @@ Daemon-mediated (run through the operation service so they obey the same hook, a
   `mark_checkout_ready_for_review`, `register_checkout_review_artifact`,
   `create_workspace_checkout`, `update_ticket_status`, `create_pull_request`,
   `push_branch`, `create_review_thread`, `reply_review_thread`,
-  `resolve_review_thread`, `reopen_review_thread`, `undeploy_app`.
+  `resolve_review_thread`, `reopen_review_thread`, `add_review_comment`,
+  `update_review_comment`, `delete_review_comment`, `request_review`,
+  `undeploy_app`.
 
 V1 does not expose `list_custom_agents` or `launch_custom_agent`.
 
@@ -88,6 +90,7 @@ V1 does not expose `list_custom_agents` or `launch_custom_agent`.
 [ ] 8. Side-effectful agent-facing MCP/API tools derive actor, session, target, plan, checkout, role/action, and manager-action ownership from server-held context or session-scoped authority records. Body-supplied actor or ownership fields are ignored or rejected on mismatch.
 [ ] 9. Authority records are short-lived, hash-stored, constant-time validated, scoped to allowed tools, and revoked on session close, action completion, plan supersession, lease abandonment, checkout archive, manager pause policy changes that invalidate the action, and daemon-admin revocation.
 [ ] 10. Review-thread MCP tools target a checkout or PR-backed review scope, never return raw diff content, and validate file/line anchors against the daemon's current review diff before storing current internal comments.
+[~] 11. Workspace review-comment MCP tools expose Citadel-native flat comments for a workspace/PR (`list_review_comments`, `add_review_comment`, `update_review_comment`, `delete_review_comment`) with optimistic concurrency tokens; `request_review` runs the repo's configured `workspace.requestReview` hook through the daemon and records suggestion runs/activity.
 [ ] 11. PR creation and branch push MCP tools target a checkout, run through daemon operations, never force-push, and return typed provider/degradation errors without hiding the local diff surface.
 
 ### Workspace Plans And Manager State

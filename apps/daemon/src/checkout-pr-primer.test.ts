@@ -41,6 +41,7 @@ function repo(overrides: Partial<Repo> = {}): Repo {
     worktreeParent: "/tmp/repo/worktrees",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: ["github-gh"],
     deployHookCommand: null,
     createdAt: nowIso,

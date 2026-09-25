@@ -153,6 +153,7 @@ describe("GET /api/workspaces/pr-state", () => {
       worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: timestamp,

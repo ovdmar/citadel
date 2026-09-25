@@ -112,6 +112,7 @@ function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean; a
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: now,

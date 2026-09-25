@@ -39,6 +39,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
     showMainWorkspace: false,
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: ts,

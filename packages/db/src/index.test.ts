@@ -2,19 +2,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SqliteStore } from "./index.js";
+import { CURRENT_SCHEMA_VERSION, SqliteStore } from "./index.js";
 
 const dirs: string[] = [];
+const stores: SqliteStore[] = [];
 
 afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
+
+function openStore(_databasePath: string) {
+  const store = new SqliteStore(":memory:");
+  stores.push(store);
+  return store;
+}
 
 describe("SqliteStore", () => {
   it("migrates and persists repo/workspace/session/activity records", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     store.insertRepo({
@@ -26,6 +34,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -34,37 +43,16 @@ describe("SqliteStore", () => {
     });
 
     expect(store.listRepos()).toHaveLength(1);
-    expect(store.query("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
-      { version: 1 },
-      { version: 2 },
-      { version: 3 },
-      { version: 4 },
-      { version: 5 },
-      { version: 6 },
-      { version: 7 },
-      { version: 8 },
-      { version: 9 },
-      { version: 10 },
-      { version: 11 },
-      { version: 12 },
-      { version: 13 },
-      { version: 14 },
-      { version: 15 },
-      { version: 16 },
-      { version: 17 },
-      { version: 18 },
-      { version: 19 },
-      { version: 20 },
-      { version: 21 },
-      { version: 22 },
-      { version: 23 },
-    ]);
+    const migrations = store.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
+    expect(migrations.map((row) => row.version)).toEqual(
+      Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1),
+    );
   });
 
   it("round-trips workspace_sessions.status_reason_at via updateSessionStatus", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "test.sqlite"));
+    const store = openStore(path.join(dir, "test.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_srr",
@@ -75,6 +63,7 @@ describe("SqliteStore", () => {
       worktreeParent: dir,
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-26T00:00:00.000Z",
@@ -142,7 +131,7 @@ describe("SqliteStore", () => {
   it("round-trips workspace, session, operation, and activity state", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_test",
@@ -153,6 +142,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: ["setup"],
       teardownHookIds: ["teardown"],
+      requestReviewHookIds: [],
       providerIds: ["github-gh"],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -317,7 +307,7 @@ describe("SqliteStore", () => {
   it("deleteWorkspace hard-removes the row and its sessions so the name slot can be reused", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_delete",
@@ -328,6 +318,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -389,7 +380,7 @@ describe("SqliteStore", () => {
   it("archives repositories and hides their active workspaces", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     const repo = {
       id: "repo_remove",
@@ -400,6 +391,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: ["github-gh"],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -446,7 +438,7 @@ describe("SqliteStore", () => {
   it("round-trips scheduled agents and writes the one-shot cron placeholder", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     const baseRepo = {
@@ -458,6 +450,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "worktrees"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -553,7 +546,7 @@ describe("SqliteStore", () => {
   it("round-trips scheduled_agent_runs rows and the queue helpers", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_runs",
@@ -564,6 +557,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "wt"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",
@@ -668,7 +662,7 @@ describe("SqliteStore", () => {
   it("round-trips background_sessions and filters by scheduledAgentId", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
 
     const now = "2026-05-17T00:00:00.000Z";
@@ -715,7 +709,7 @@ describe("SqliteStore", () => {
   it("deleteScheduledAgentCascade removes runs + background_sessions in one transaction and returns the cleanup metadata", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    const store = openStore(path.join(dir, "citadel.sqlite"));
     store.migrate();
     store.insertRepo({
       id: "repo_cascade",
@@ -726,6 +720,7 @@ describe("SqliteStore", () => {
       worktreeParent: path.join(dir, "wt"),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-05-17T00:00:00.000Z",

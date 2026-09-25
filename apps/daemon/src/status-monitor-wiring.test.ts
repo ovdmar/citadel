@@ -96,6 +96,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       worktreeParent: tmpDbDir,
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: ["github-gh"],
       deployHookCommand: null,
       createdAt: now,

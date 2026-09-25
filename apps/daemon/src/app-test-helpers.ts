@@ -24,7 +24,7 @@ export function createFixture(dirs: string[]) {
   };
   config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   config.terminal = { displayName: "Terminal", command: "bash", args: ["-l"] };
-  const store = new SqliteStore(config.databasePath);
+  const store = new SqliteStore(":memory:");
   store.migrate();
   // Tests opt out of the background refresh job — they don't want a 15s tick
   // (or the implied gh/jtk subprocesses) firing during their test runtime.

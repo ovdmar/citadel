@@ -17,6 +17,7 @@ declare module "./index.js" {
           | "showMainWorkspace"
           | "setupHookIds"
           | "teardownHookIds"
+          | "requestReviewHookIds"
           | "providerIds"
           | "deployHookCommand"
         >
@@ -38,9 +39,9 @@ export const repoStoreMethods = {
     this.database
       .prepare(
         `INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent,
-          provider_repository_key, show_main_workspace, setup_hook_ids, teardown_hook_ids, provider_ids,
+          provider_repository_key, show_main_workspace, setup_hook_ids, teardown_hook_ids, request_review_hook_ids, provider_ids,
           deploy_hook_command, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         repo.id,
@@ -53,6 +54,7 @@ export const repoStoreMethods = {
         repo.showMainWorkspace ? 1 : 0,
         JSON.stringify(repo.setupHookIds),
         JSON.stringify(repo.teardownHookIds),
+        JSON.stringify(repo.requestReviewHookIds ?? []),
         JSON.stringify(repo.providerIds),
         repo.deployHookCommand ?? null,
         repo.createdAt,
@@ -77,6 +79,7 @@ export const repoStoreMethods = {
         patch.showMainWorkspace !== undefined ? patch.showMainWorkspace : (current.showMainWorkspace ?? false),
       setupHookIds: patch.setupHookIds ?? current.setupHookIds,
       teardownHookIds: patch.teardownHookIds ?? current.teardownHookIds,
+      requestReviewHookIds: patch.requestReviewHookIds ?? current.requestReviewHookIds,
       providerIds: patch.providerIds ?? current.providerIds,
       deployHookCommand: patch.deployHookCommand !== undefined ? patch.deployHookCommand : current.deployHookCommand,
       updatedAt: new Date().toISOString(),
@@ -84,7 +87,7 @@ export const repoStoreMethods = {
     this.database
       .prepare(
         `UPDATE repos SET name = ?, worktree_parent = ?, provider_repository_key = ?, show_main_workspace = ?,
-          setup_hook_ids = ?, teardown_hook_ids = ?, provider_ids = ?, deploy_hook_command = ?, updated_at = ?
+          setup_hook_ids = ?, teardown_hook_ids = ?, request_review_hook_ids = ?, provider_ids = ?, deploy_hook_command = ?, updated_at = ?
          WHERE id = ?`,
       )
       .run(
@@ -94,6 +97,7 @@ export const repoStoreMethods = {
         next.showMainWorkspace ? 1 : 0,
         JSON.stringify(next.setupHookIds),
         JSON.stringify(next.teardownHookIds),
+        JSON.stringify(next.requestReviewHookIds ?? []),
         JSON.stringify(next.providerIds),
         next.deployHookCommand ?? null,
         next.updatedAt,

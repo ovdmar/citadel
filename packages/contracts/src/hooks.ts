@@ -82,6 +82,7 @@ export const HookEventSchema = z.enum([
   "agent.started",
   "pr.merge",
   "merge.conflict.detected",
+  "workspace.requestReview",
   "review.requested",
 ]);
 

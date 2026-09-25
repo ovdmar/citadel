@@ -42,6 +42,7 @@ function makeFixture() {
     worktreeParent: "/tmp/fake-worktrees",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: ts,

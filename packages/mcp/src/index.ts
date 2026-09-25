@@ -13,7 +13,9 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import { AGENTS_SYSTEM_TOOL_DEFINITIONS, type AgentsSystemToolName } from "./agents-system-tools.js";
+import { deployedAppActionTool } from "./deploy-tools.js";
 import { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
+import { reviewMcpToolDefinitions, type ReviewMcpToolName } from "./review-tools.js";
 import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
 
 export { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
@@ -58,6 +60,7 @@ export type McpToolName =
   | "archive_namespace"
   | "restore_namespace"
   | "assign_workspace_to_namespace"
+  | ReviewMcpToolName
   | ScratchpadToolName
   | "list_deployed_apps"
   | "redeploy_app"
@@ -77,23 +80,6 @@ export type McpToolDefinition = {
   inputSchema: Record<string, unknown>;
   destructive: boolean;
 };
-
-function deployedAppActionTool(name: "redeploy_app" | "undeploy_app", description: string, allAction: string) {
-  return {
-    name,
-    description,
-    inputSchema: {
-      type: "object",
-      required: ["workspaceId"],
-      properties: {
-        workspaceId: { type: "string" },
-        name: { type: "string", maxLength: 80, description: `App name from list_deployed_apps. Omit to ${allAction}.` },
-      },
-      additionalProperties: false,
-    },
-    destructive: true,
-  } satisfies McpToolDefinition;
-}
 
 export type McpToolContext = {
   repos: Repo[];
@@ -444,6 +430,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     ...SCRATCHPAD_TOOL_DEFINITIONS,
+    ...reviewMcpToolDefinitions,
     {
       name: "list_deployed_apps",
       description:
@@ -737,6 +724,11 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "reply_review_thread":
     case "resolve_review_thread":
     case "reopen_review_thread":
+    case "list_review_comments":
+    case "request_review":
+    case "add_review_comment":
+    case "update_review_comment":
+    case "delete_review_comment":
       return { error: "review_tool_requires_daemon" };
     case "get_citadel_context":
       return { error: "context_tool_requires_daemon" };

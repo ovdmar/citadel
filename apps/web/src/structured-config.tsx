@@ -30,6 +30,7 @@ type HookConfig = {
     | "workspace.teardown"
     | "workspace.apps"
     | "workspace.action"
+    | "workspace.requestReview"
     | "workspace.created"
     | "workspace.archived"
     | "workspace.removed"
@@ -59,7 +60,13 @@ type ConfigResponse = {
     terminal: TerminalProfileConfig;
     usageProviders: UsageProviderConfig[];
     hooks: HookConfig[];
-    repoDefaults: { setupHookIds: string[]; teardownHookIds: string[] };
+    repoDefaults: {
+      setupHookIds: string[];
+      teardownHookIds: string[];
+      appHookIds?: string[];
+      actionHookIds?: string[];
+      requestReviewHookIds?: string[];
+    };
     commandPolicy: { hookTimeoutMs: number; allowDestructiveWorkspaceCleanup: boolean };
     scratchpad?: { path?: string };
   };
@@ -71,6 +78,7 @@ const HOOK_EVENTS: HookConfig["event"][] = [
   "workspace.teardown",
   "workspace.apps",
   "workspace.action",
+  "workspace.requestReview",
   "workspace.created",
   "workspace.archived",
   "workspace.removed",
@@ -98,6 +106,15 @@ export function StructuredConfig() {
   const [jiraProject, setJiraProject] = useState("");
   const [setupHookIds, setSetupHookIds] = useState("");
   const [teardownHookIds, setTeardownHookIds] = useState("");
+  // appHookIds / actionHookIds / requestReviewHookIds are managed elsewhere
+  // (Settings UI panels) but live under the same `repoDefaults` object. The
+  // Advanced editor here only exposes setup/teardown, so we round-trip the
+  // rest unchanged to avoid clobbering them on save.
+  const [repoDefaultsExtra, setRepoDefaultsExtra] = useState<{
+    appHookIds: string[];
+    actionHookIds: string[];
+    requestReviewHookIds: string[];
+  }>({ appHookIds: [], actionHookIds: [], requestReviewHookIds: [] });
   const [hookTimeoutMs, setHookTimeoutMs] = useState(120_000);
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [scratchpadPath, setScratchpadPath] = useState("");
@@ -117,6 +134,11 @@ export function StructuredConfig() {
     setJiraProject(cfg.providers.jira.projectKey ?? "");
     setSetupHookIds(cfg.repoDefaults.setupHookIds.join(", "));
     setTeardownHookIds(cfg.repoDefaults.teardownHookIds.join(", "));
+    setRepoDefaultsExtra({
+      appHookIds: cfg.repoDefaults.appHookIds ?? [],
+      actionHookIds: cfg.repoDefaults.actionHookIds ?? [],
+      requestReviewHookIds: cfg.repoDefaults.requestReviewHookIds ?? [],
+    });
     setHookTimeoutMs(cfg.commandPolicy.hookTimeoutMs);
     setAllowDestructive(cfg.commandPolicy.allowDestructiveWorkspaceCleanup);
     setScratchpadPath(cfg.scratchpad?.path ?? "");
@@ -143,6 +165,9 @@ export function StructuredConfig() {
           repoDefaults: {
             setupHookIds: split(setupHookIds),
             teardownHookIds: split(teardownHookIds),
+            appHookIds: repoDefaultsExtra.appHookIds,
+            actionHookIds: repoDefaultsExtra.actionHookIds,
+            requestReviewHookIds: repoDefaultsExtra.requestReviewHookIds,
           },
           commandPolicy: { hookTimeoutMs, allowDestructiveWorkspaceCleanup: allowDestructive },
           scratchpad: { path: scratchpadPath.trim() || undefined },

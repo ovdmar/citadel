@@ -48,6 +48,7 @@ function setupStore() {
     worktreeParent: path.join(dir, "worktrees"),
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: timestamp,

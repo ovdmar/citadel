@@ -43,6 +43,7 @@ import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import { resolveCreateAgentSessionInputFromTemplates } from "./agent-session-template-resolver.js";
 import type { ProviderCache } from "./app-helpers.js";
+import { handleReviewTool, isReviewTool } from "./daemon-mcp-review-tool.js";
 import { readLogSlice } from "./log-slice.js";
 import { readReviewDiffMetadata } from "./review-diff.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
@@ -688,6 +689,9 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, 
     const slice = readLogSlice(run.logFilePath, { offset, ...(maxBytes !== undefined ? { maxBytes } : {}) });
     if ("kind" in slice) return { error: "log_file_missing" };
     return slice;
+  }
+  if (isReviewTool(call.name)) {
+    return handleReviewTool(deps, call);
   }
   const providerHealth = await collectProviderHealth(config.providers);
   const workspaces = store.listWorkspaces();

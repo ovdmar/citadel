@@ -191,6 +191,7 @@ describe("config/repo/workspace routes", () => {
       showMainWorkspace: false,
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: "2026-06-03T00:00:00.000Z",

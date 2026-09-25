@@ -12,6 +12,28 @@ import type {
 const MAX_DIFF_BYTES = 128 * 1024;
 const MAX_DIFF_FILES = 80;
 
+export type WorkspaceDiffSummary = {
+  files: string[];
+  addedLines: number;
+  deletedLines: number;
+  truncated: boolean;
+};
+
+export function readWorkspaceDiffSummary(workspaceId: string, cwd: string): WorkspaceDiffSummary {
+  try {
+    const diff = readWorkspaceDiff(workspaceId, cwd);
+    return {
+      files: diff.files.map((f) => f.path),
+      addedLines: diff.addedLines,
+      deletedLines: diff.deletedLines,
+      truncated: diff.truncated,
+    };
+  } catch (error) {
+    // Mark truncated so hooks can distinguish "no changes" from "fetch failed".
+    return { files: [], addedLines: 0, deletedLines: 0, truncated: true };
+  }
+}
+
 export function readWorkspaceDiff(workspaceId: string, cwd: string): WorkspaceDiff {
   const status = execGit(cwd, ["status", "--porcelain=v1", "-z"]);
   const paths = parseStatus(status);

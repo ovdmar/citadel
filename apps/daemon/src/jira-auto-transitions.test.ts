@@ -26,6 +26,7 @@ function makeRepo(id = "repo_a"): Repo {
     worktreeParent: "/tmp/wt",
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: now,

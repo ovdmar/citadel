@@ -44,6 +44,7 @@ describe("deploy targets", () => {
       showMainWorkspace: false,
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: now,
